@@ -15,20 +15,36 @@ use Symfony\Component\DependencyInjection\ContainerInterface;
 class BotGuardDashboardController extends ControllerBase {
 
   /**
+   * The default cache backend.
+   *
    * @var \Drupal\Core\Cache\CacheBackendInterface
    */
   protected $cache;
 
   /**
+   * The time service.
+   *
    * @var \Drupal\Component\Datetime\TimeInterface
    */
   protected $time;
 
   /**
+   * The config factory service.
+   *
    * @var \Drupal\Core\Config\ConfigFactoryInterface
    */
   protected $configFactory;
 
+  /**
+   * Constructs a BotGuardDashboardController object.
+   *
+   * @param \Drupal\Core\Cache\CacheBackendInterface $cache
+   *   The default cache backend.
+   * @param \Drupal\Component\Datetime\TimeInterface $time
+   *   The time service.
+   * @param \Drupal\Core\Config\ConfigFactoryInterface $configFactory
+   *   The config factory service.
+   */
   public function __construct(
     CacheBackendInterface $cache,
     TimeInterface $time,
@@ -39,6 +55,9 @@ class BotGuardDashboardController extends ControllerBase {
     $this->configFactory = $configFactory;
   }
 
+  /**
+   * {@inheritdoc}
+   */
   public static function create(ContainerInterface $container): self {
     return new static(
       $container->get('cache.default'),
@@ -50,13 +69,19 @@ class BotGuardDashboardController extends ControllerBase {
   /**
    * Dashboard route callback.
    */
+  /**
+   * Builds the dashboard page.
+   *
+   * @return array
+   *   A render array for the dashboard page.
+   */
   public function dashboard(): array {
     $config = $this->configFactory->get('bot_guard.settings');
 
     // Check cache availability
     $cache_backend = $this->getCacheBackendName();
     $use_persistent = $this->usePersistentCache();
-    
+
     // Load metrics
     if ($use_persistent) {
       // Use Drupal cache backend (Memcache/Redis)
@@ -246,7 +271,7 @@ class BotGuardDashboardController extends ControllerBase {
       $build['history'] = [
         '#type' => 'details',
         '#title' => $this->t('Recent Block Events (Last 20)'),
-        '#open' => FALSE,
+        '#open' => TRUE,
         'table' => [
           '#type' => 'table',
           '#header' => [

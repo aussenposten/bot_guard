@@ -5,6 +5,9 @@ bot_guard.settings:
     enabled:
       type: boolean
       label: 'Enable Bot Guard'
+    allow_ips:
+      type: text
+      label: 'IP Allow-list (CIDR notation, one per line)'
     allow_bots:
       type: text
       label: 'Allow-list regex (one per line)'

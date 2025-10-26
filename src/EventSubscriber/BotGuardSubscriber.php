@@ -18,8 +18,18 @@ use Drupal\Component\Utility\Crypt;
  */
 class BotGuardSubscriber implements EventSubscriberInterface {
 
+  /**
+   * The config factory service.
+   *
+   * @var \Drupal\Core\Config\ConfigFactoryInterface
+   */
   protected $configFactory;
 
+  /**
+   * The current user service.
+   *
+   * @var \Drupal\Core\Session\AccountProxyInterface
+   */
   protected $currentUser;
 
   /**
@@ -43,11 +53,25 @@ class BotGuardSubscriber implements EventSubscriberInterface {
    */
   protected $time;
 
-  // Cache decision states
+  /**
+   * Cache decision state: Allow the request.
+   *
+   * @var int
+   */
   private const ALLOW = 1;
 
+  /**
+   * Cache decision state: Block the request.
+   *
+   * @var int
+   */
   private const BLOCK = -1;
 
+  /**
+   * Cache decision state: A challenge is pending verification.
+   *
+   * @var int
+   */
   private const CHALLENGE_PENDING = 2;
 
   /**
@@ -78,6 +102,9 @@ class BotGuardSubscriber implements EventSubscriberInterface {
     $this->time = $time;
   }
 
+  /**
+   * {@inheritdoc}
+   */
   public static function getSubscribedEvents(): array {
     // Very early.
     return [
@@ -85,6 +112,12 @@ class BotGuardSubscriber implements EventSubscriberInterface {
     ];
   }
 
+  /**
+   * Main request handler to check and block bots.
+   *
+   * @param \Symfony\Component\HttpKernel\Event\RequestEvent $event
+   *   The request event.
+   */
   public function onRequest(RequestEvent $event): void {
     // Only act on the main request (Drupal 9/10 => isMainRequest()).
     if (!$event->isMainRequest()) {
@@ -104,13 +137,17 @@ class BotGuardSubscriber implements EventSubscriberInterface {
 
     $request = $event->getRequest();
     $ua = $request->headers->get('User-Agent', '');
-    $al = $request->headers->get('Accept-Language', '');
     $path = $request->getPathInfo();
     $ip = $request->getClientIp() ?? '0.0.0.0';
     $method = $request->getMethod();
 
-    // ---- Decision cache (APCu) --------------------------------------------
-    $decision = NULL;
+    // IP Allow-list (bypass all checks).
+    $allowIps = (string) $config->get('allow_ips');
+    if ($allowIps && $this->ipInAllowlist($ip, $allowIps)) {
+      return;
+    }
+
+    // Decision cache.
     $cacheEnabled = (bool) $config->get('cache_enabled');
     $cacheTtl = (int) ($config->get('cache_ttl') ?? 300);
     $cacheKey = $this->cacheKey($ip, $ua, $path);
@@ -119,29 +156,18 @@ class BotGuardSubscriber implements EventSubscriberInterface {
       $decision = apcu_fetch($cacheKey);
       if (is_int($decision)) {
         if ($decision === self::ALLOW) {
-          // Count cached allowed requests
-          if ($this->usePersistentCache()) {
-            $cached = $this->cacheBackend->get('bg.allowed.count');
-            $count = $cached ? $cached->data : 0;
-            $this->cacheBackend->set('bg.allowed.count', $count + 1);
-          }
-          elseif (function_exists('apcu_fetch')) {
-            $allowed = apcu_fetch('bg.allowed.count');
-            apcu_store('bg.allowed.count', ($allowed === FALSE ? 1 : ((int) $allowed) + 1), 0);
-          }
+          // Count cached allowed requests.
+          $this->incrementAllowedCounter();
           return;
         }
         if ($decision === self::BLOCK) {
           $this->deny($event, $config, $ip, $ua, $path, 'cached-block');
           return;
         }
-        if ($decision === self::CHALLENGE_PENDING) {
-          // fall-through to verify cookie again (cheap)
-        }
       }
     }
 
-    // ---- Initialize metrics start time (once) -----------------------------
+    // Initialize metrics start time (once).
     if ($this->isCacheAvailable()) {
       if ($this->usePersistentCache()) {
         if (!$this->cacheBackend->get('bg.metrics.start')) {
@@ -153,31 +179,14 @@ class BotGuardSubscriber implements EventSubscriberInterface {
       }
     }
 
-    // ---- Allow-list quick path --------------------------------------------
+    // Allow-list quick path.
     if ($this->matchesAny($ua, (string) $config->get('allow_bots'))) {
-      // Metrics: allowed counter
-      if ($this->usePersistentCache()) {
-        $cached = $this->cacheBackend->get('bg.allowed.count');
-        $count = $cached ? $cached->data : 0;
-        $this->cacheBackend->set('bg.allowed.count', $count + 1);
-      }
-      elseif (function_exists('apcu_fetch')) {
-        $allowed = apcu_fetch('bg.allowed.count');
-        apcu_store('bg.allowed.count', ($allowed === FALSE ? 1 : ((int) $allowed) + 1), 0);
-      }
-
+      $this->incrementAllowedCounter();
       $this->storeDecision($cacheEnabled, $cacheKey, self::ALLOW, $cacheTtl);
       return;
     }
 
-    // ---- Block-list UA patterns -------------------------------------------
-    if ($ua !== '' && $this->matchesAny($ua, (string) $config->get('block_bots'))) {
-      $this->storeDecision($cacheEnabled, $cacheKey, self::BLOCK, $cacheTtl);
-      $this->deny($event, $config, $ip, $ua, $path, 'ua-block');
-      return;
-    }
-
-    // ---- Heuristics: empty/short UA, missing Accept-Language --------------
+    // Heuristics: empty/short UA, missing Accept-Language.
     if ($ua === '' || strlen($ua) < 10) {
       $this->storeDecision($cacheEnabled, $cacheKey, self::BLOCK, $cacheTtl);
       $this->deny($event, $config, $ip, $ua, $path, 'ua-short');
@@ -189,15 +198,53 @@ class BotGuardSubscriber implements EventSubscriberInterface {
       return;
     }
 
-    // ---- Facet Bot Blocking (independent of language) -----------------------
-    // Only apply facet protection if the facets module is installed.
+    // Block-list UA patterns.
+    if ($ua !== '' && $this->matchesAny($ua, (string) $config->get('block_bots'))) {
+      $this->storeDecision($cacheEnabled, $cacheKey, self::BLOCK, $cacheTtl);
+      $this->deny($event, $config, $ip, $ua, $path, 'ua-block');
+      return;
+    }
+
+    // Rate limit.
+    $max = (int) ($config->get('rate_limit') ?? 20);
+    $win = (int) ($config->get('rate_window') ?? 10);
+    if ($max > 0 && function_exists('apcu_fetch')) {
+      if (!$this->rateCheck($ip, $max, $win)) {
+        // 429 not cached (small window anyway)
+        $this->deny429($event, $config, $ip, $ua, $path, 'ratelimit');
+      }
+    }
+
+    // Cookie challenge.
+    $challengeEnabled = (bool) ($config->get('challenge_enabled') ?? TRUE);
+    if ($challengeEnabled) {
+      // Only challenge for GET/HEAD; let POST/PUT be blocked (404) if not allowed bot.
+      if (in_array($method, ['GET', 'HEAD'], TRUE)) {
+        $cookieName = (string) ($config->get('cookie_name') ?? 'bg_chal');
+        $cookieTtl = (int) ($config->get('cookie_ttl') ?? 86400);
+
+        if (!$this->hasValidChallengeCookie($request->cookies->get($cookieName), $ip, $ua)) {
+          $this->storeDecision($cacheEnabled, $cacheKey, self::CHALLENGE_PENDING, $cacheTtl);
+          $this->serveChallenge($event, $cookieName, $cookieTtl, $ip, $ua);
+          return;
+        }
+      }
+      else {
+        // Non-GET without valid challenge → deny 404 (cheap protection)
+        $this->storeDecision($cacheEnabled, $cacheKey, self::BLOCK, $cacheTtl);
+        $this->deny($event, $config, $ip, $ua, $path, 'method-block');
+        return;
+      }
+    }
+
+    // Facet Bot Blocking.
     if ($this->moduleHandler->moduleExists('facets')) {
       $facetEnabled = (bool) ($config->get('facet_enabled') ?? TRUE);
       if ($facetEnabled && isset($_GET['f']) && is_array($_GET['f'])) {
         $limit = (int) ($config->get('facet_limit') ?? 2);
 
         // Metrics (allowed/blocked + start time) using default cache bin.
-        $cache = \Drupal::cache();
+        $cache = $this->cacheBackend;
         if (!$cache->get('facet_bot.metrics_start')) {
           $cache->set('facet_bot.metrics_start', time());
         }
@@ -228,11 +275,11 @@ class BotGuardSubscriber implements EventSubscriberInterface {
           $cache->set('facet_bot.allowed', $allowed_count + 1);
         }
 
-        // ---- Facet Flood Pattern Detection (APCu-based, very cheap) -----------
+        // Facet Flood Pattern Detection.
         $facetFloodEnabled = (bool) ($config->get('facet_flood_enabled') ?? TRUE);
         $facetThreshold = (int) ($config->get('facet_flood_threshold') ?? 20);
-        $facetWindow    = (int) ($config->get('facet_flood_window') ?? 600);
-        $facetBan       = (int) ($config->get('facet_flood_ban') ?? 1800);
+        $facetWindow = (int) ($config->get('facet_flood_window') ?? 600);
+        $facetBan = (int) ($config->get('facet_flood_ban') ?? 1800);
 
         if ($facetFloodEnabled && $facetThreshold > 0 && $facetWindow > 0 && function_exists('apcu_fetch')) {
           // If already banned, deny immediately.
@@ -251,8 +298,8 @@ class BotGuardSubscriber implements EventSubscriberInterface {
           $data = apcu_fetch($key);
           if (!is_array($data) || !isset($data['first_ts']) || ($now - (int) $data['first_ts']) > $facetWindow) {
             $data = [
-              'unique'   => [$sig => TRUE],
-              'count'    => 1,
+              'unique' => [$sig => TRUE],
+              'count' => 1,
               'first_ts' => $now,
             ];
           }
@@ -277,64 +324,59 @@ class BotGuardSubscriber implements EventSubscriberInterface {
       }
     }
 
-    // ---- Rate limit (APCu only; skip if not available) --------------------
-    $max = (int) ($config->get('rate_limit') ?? 20);
-    $win = (int) ($config->get('rate_window') ?? 10);
-    if ($max > 0 && function_exists('apcu_fetch')) {
-      if (!$this->rateCheck($ip, $max, $win)) {
-        // 429 not cached (small window anyway)
-        $this->deny429($event, $config, $ip, $ua, $path, 'ratelimit');
-      }
-    }
-
-    // ---- Cookie challenge --------------------------------------------------
-    $challengeEnabled = (bool) ($config->get('challenge_enabled') ?? TRUE);
-    if ($challengeEnabled) {
-      // Only challenge for GET/HEAD; let POST/PUT be blocked (404) if not allowed bot.
-      if (in_array($method, ['GET', 'HEAD'], TRUE)) {
-        $cookieName = (string) ($config->get('cookie_name') ?? 'bg_chal');
-        $cookieTtl = (int) ($config->get('cookie_ttl') ?? 86400);
-
-        if (!$this->hasValidChallengeCookie($request->cookies->get($cookieName), $ip, $ua)) {
-          $this->storeDecision($cacheEnabled, $cacheKey, self::CHALLENGE_PENDING, $cacheTtl);
-          $this->serveChallenge($event, $cookieName, $cookieTtl, $ip, $ua);
-          return;
-        }
-      }
-      else {
-        // Non-GET without valid challenge → deny 404 (cheap protection)
-        $this->storeDecision($cacheEnabled, $cacheKey, self::BLOCK, $cacheTtl);
-        $this->deny($event, $config, $ip, $ua, $path, 'method-block');
-        return;
-      }
-    }
-
-    // Passed all checks - count as allowed request
-    if ($this->usePersistentCache()) {
-      $cached = $this->cacheBackend->get('bg.allowed.count');
-      $count = $cached ? $cached->data : 0;
-      $this->cacheBackend->set('bg.allowed.count', $count + 1);
-    }
-    elseif (function_exists('apcu_fetch')) {
-      $allowed = apcu_fetch('bg.allowed.count');
-      apcu_store('bg.allowed.count', ($allowed === FALSE ? 1 : ((int) $allowed) + 1), 0);
-    }
-    
+    // Passed all checks - count as allowed request.
+    $this->incrementAllowedCounter();
     $this->storeDecision($cacheEnabled, $cacheKey, self::ALLOW, $cacheTtl);
   }
 
+  /**
+   * Generate a cache key for a decision.
+   *
+   * @param string $ip
+   *   The client IP address.
+   * @param string $ua
+   *   The client User-Agent string.
+   * @param string $path
+   *   The request path.
+   *
+   * @return string
+   *   A hashed cache key.
+   */
   private function cacheKey(string $ip, string $ua, string $path): string {
     // Path bucket to avoid huge key cardinality (first segment only)
     $seg = explode('/', trim($path, '/'))[0] ?? '';
     return 'bg:' . sha1($ip . "\n" . $ua . "\n" . $seg);
   }
 
+  /**
+   * Store a decision in the APCu cache.
+   *
+   * @param bool $enabled
+   *   Whether caching is enabled.
+   * @param string $key
+   *   The cache key.
+   * @param int $value
+   *   The decision value to store (ALLOW, BLOCK, etc.).
+   * @param int $ttl
+   *   The cache lifetime in seconds.
+   */
   private function storeDecision(bool $enabled, string $key, int $value, int $ttl): void {
     if ($enabled && function_exists('apcu_store')) {
       apcu_store($key, $value, $ttl);
     }
   }
 
+  /**
+   * Check if a string matches any regex pattern from a newline-separated list.
+   *
+   * @param string $subject
+   *   The string to check.
+   * @param string $patterns
+   *   A newline-separated string of regex patterns.
+   *
+   * @return bool
+   *   TRUE if any pattern matches, FALSE otherwise.
+   */
   private function matchesAny(string $subject, string $patterns): bool {
     foreach (preg_split('/\R+/', $patterns) as $p) {
       $p = trim($p);
@@ -345,8 +387,24 @@ class BotGuardSubscriber implements EventSubscriberInterface {
     return FALSE;
   }
 
+  /**
+   * Deny a request with a standard block response.
+   *
+   * @param \Symfony\Component\HttpKernel\Event\RequestEvent $event
+   *   The request event.
+   * @param \Drupal\Core\Config\ImmutableConfig $config
+   *   The module configuration.
+   * @param string $ip
+   *   The client IP address.
+   * @param string $ua
+   *   The client User-Agent string.
+   * @param string $path
+   *   The request path.
+   * @param string $reason
+   *   The reason for blocking the request.
+   */
   private function deny(RequestEvent $event, $config, string $ip, string $ua, string $path, string $reason): void {
-    $this->log($config, $ip, $ua, $path, $reason);
+    $this->log($ip, $ua, $path, $reason);
 
     // Use centralized error response configuration.
     $statusCode = (int) ($config->get('block_status_code') ?? 404);
@@ -358,8 +416,24 @@ class BotGuardSubscriber implements EventSubscriberInterface {
     $event->stopPropagation();
   }
 
+  /**
+   * Deny a request with a 429 Too Many Requests response.
+   *
+   * @param \Symfony\Component\HttpKernel\Event\RequestEvent $event
+   *   The request event.
+   * @param \Drupal\Core\Config\ImmutableConfig $config
+   *   The module configuration.
+   * @param string $ip
+   *   The client IP address.
+   * @param string $ua
+   *   The client User-Agent string.
+   * @param string $path
+   *   The request path.
+   * @param string $reason
+   *   The reason for blocking the request.
+   */
   private function deny429(RequestEvent $event, $config, string $ip, string $ua, string $path, string $reason): void {
-    $this->log($config, $ip, $ua, $path, $reason);
+    $this->log($ip, $ua, $path, $reason);
 
     // Use centralized rate limit error response configuration.
     $statusCode = (int) ($config->get('ratelimit_status_code') ?? 429);
@@ -373,7 +447,19 @@ class BotGuardSubscriber implements EventSubscriberInterface {
     $event->stopPropagation();
   }
 
-  private function log($config, string $ip, string $ua, string $path, string $reason): void {
+  /**
+   * Log a blocked request to the cache for metrics.
+   *
+   * @param string $ip
+   *   The client IP address.
+   * @param string $ua
+   *   The client User-Agent string.
+   * @param string $path
+   *   The request path.
+   * @param string $reason
+   *   The reason for blocking the request.
+   */
+  private function log(string $ip, string $ua, string $path, string $reason): void {
     if (!$this->isCacheAvailable()) {
       return;
     }
@@ -418,7 +504,7 @@ class BotGuardSubscriber implements EventSubscriberInterface {
       $this->cacheBackend->set('bg.history', $hist);
     }
     elseif (function_exists('apcu_fetch')) {
-      // APCu fallback
+      // APCu fallback.
       if (!apcu_exists('bg.metrics.start')) {
         apcu_store('bg.metrics.start', time(), 0);
       }
@@ -451,7 +537,19 @@ class BotGuardSubscriber implements EventSubscriberInterface {
     }
   }
 
-  // ---- APCu rate limiter (cheap) ------------------------------------------
+  /**
+   * Perform rate limiting check using APCu.
+   *
+   * @param string $ip
+   *   The client IP address.
+   * @param int $max
+   *   Maximum number of requests allowed.
+   * @param int $window
+   *   The time window in seconds.
+   *
+   * @return bool
+   *   TRUE if the request is within the limit, FALSE otherwise.
+   */
   private function rateCheck(string $ip, int $max, int $window): bool {
     $now = time();
     $key = 'bg_rl_' . sha1($ip);
@@ -464,9 +562,21 @@ class BotGuardSubscriber implements EventSubscriberInterface {
     return $data['c'] <= $max;
   }
 
-  // ---- Cookie challenge: stateless signed cookie --------------------------
+  /**
+   * Serve a JavaScript-based cookie challenge.
+   *
+   * @param \Symfony\Component\HttpKernel\Event\RequestEvent $event
+   *   The request event.
+   * @param string $cookieName
+   *   The name of the challenge cookie.
+   * @param int $ttl
+   *   The cookie lifetime in seconds.
+   * @param string $ip
+   *   The client IP address.
+   * @param string $ua
+   *   The client User-Agent string.
+   */
   private function serveChallenge(RequestEvent $event, string $cookieName, int $ttl, string $ip, string $ua): void {
-    // Metrics
     if ($this->usePersistentCache()) {
       $cached = $this->cacheBackend->get('bg.challenge.count');
       $count = $cached ? $cached->data : 0;
@@ -503,8 +613,21 @@ class BotGuardSubscriber implements EventSubscriberInterface {
     $event->setResponse($response);
   }
 
+  /**
+   * Validate the challenge cookie.
+   *
+   * @param string|null $cookie
+   *   The cookie value from the request.
+   * @param string $ip
+   *   The client IP address.
+   * @param string $ua
+   *   The client User-Agent string.
+   *
+   * @return bool
+   *   TRUE if the cookie is present and valid, FALSE otherwise.
+   */
   private function hasValidChallengeCookie(?string $cookie, string $ip, string $ua): bool {
-    if (!$cookie || strpos($cookie, ':') === FALSE) {
+    if (!$cookie || !str_contains($cookie, ':')) {
       return FALSE;
     }
     [$exp, $sig] = explode(':', $cookie, 2);
@@ -519,8 +642,21 @@ class BotGuardSubscriber implements EventSubscriberInterface {
     return hash_equals($expected, $sig);
   }
 
+  /**
+   * Generate a signature for the challenge cookie.
+   *
+   * @param string $ip
+   *   The client IP address.
+   * @param string $ua
+   *   The client User-Agent string.
+   * @param int $exp
+   *   The expiration timestamp.
+   *
+   * @return string
+   *   A base64-encoded HMAC-SHA256 signature.
+   */
   private function sign(string $ip, string $ua, int $exp): string {
-    // Use Drupal hash salt; fallback to Crypt::randomBytesBase64()
+    // Use Drupal hash salt; fallback to Crypt::randomBytesBase64().
     $salt = (string) \Drupal::service('settings')->get('hash_salt');
     if ($salt === '') {
       $salt = Crypt::randomBytesBase64();
@@ -571,25 +707,6 @@ class BotGuardSubscriber implements EventSubscriberInterface {
   }
 
   /**
-   * Get cache backend name for debugging.
-   *
-   * @return string
-   *   The cache backend name.
-   */
-  private function getCacheBackendName(): string {
-    if ($this->moduleHandler->moduleExists('memcache')) {
-      return 'Memcache';
-    }
-    if ($this->moduleHandler->moduleExists('redis')) {
-      return 'Redis';
-    }
-    if (function_exists('apcu_fetch')) {
-      return 'APCu (fallback)';
-    }
-    return 'None';
-  }
-
-  /**
    * Check if we should use persistent cache (Memcache/Redis).
    *
    * @return bool
@@ -601,5 +718,82 @@ class BotGuardSubscriber implements EventSubscriberInterface {
       $this->moduleHandler->moduleExists('redis')
     );
   }
-}
 
+  /**
+   * Check if IP is in allowlist.
+   *
+   * @param string $ip
+   *   IP address to check.
+   * @param string $allowlist
+   *   Newline-separated list of IPs/CIDR ranges.
+   *
+   * @return bool
+   *   TRUE if IP is in allowlist.
+   */
+  private function ipInAllowlist(string $ip, string $allowlist): bool {
+    foreach (preg_split('/\R+/', $allowlist) as $entry) {
+      $entry = trim($entry);
+      if ($entry === '') {
+        continue;
+      }
+
+      // Check if entry contains CIDR notation.
+      if (str_contains($entry, '/')) {
+        if ($this->ipInCidr($ip, $entry)) {
+          return TRUE;
+        }
+      }
+      // Exact IP match.
+      elseif ($ip === $entry) {
+        return TRUE;
+      }
+    }
+
+    return FALSE;
+  }
+
+  /**
+   * Check if IP is in CIDR range.
+   *
+   * @param string $ip
+   *   IP address to check.
+   * @param string $cidr
+   *   CIDR notation (e.g., 192.168.0.0/16).
+   *
+   * @return bool
+   *   TRUE if IP is in CIDR range.
+   */
+  /**
+   * Increment the allowed requests counter in the cache.
+   */
+  private function incrementAllowedCounter(): void {
+    if ($this->usePersistentCache()) {
+      $cached = $this->cacheBackend->get('bg.allowed.count');
+      $count = $cached ? $cached->data : 0;
+      $this->cacheBackend->set('bg.allowed.count', $count + 1);
+    }
+    elseif (function_exists('apcu_fetch')) {
+      $allowed = apcu_fetch('bg.allowed.count');
+      apcu_store('bg.allowed.count', ($allowed === FALSE ? 1 : ((int) $allowed) + 1), 0);
+    }
+  }
+
+  private function ipInCidr(string $ip, string $cidr): bool {
+    [$subnet, $mask] = explode('/', $cidr);
+
+    // Convert IP and subnet to long integers.
+    $ip_long = ip2long($ip);
+    $subnet_long = ip2long($subnet);
+
+    if ($ip_long === FALSE || $subnet_long === FALSE) {
+      return FALSE;
+    }
+
+    // Calculate network mask.
+    $mask_long = -1 << (32 - (int) $mask);
+
+    // Check if IP is in subnet.
+    return ($ip_long & $mask_long) === ($subnet_long & $mask_long);
+  }
+
+}

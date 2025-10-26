@@ -4,9 +4,13 @@ namespace Drupal\bot_guard\Form;
 
 use Drupal\Core\Form\ConfigFormBase;
 use Drupal\Core\Form\FormStateInterface;
+use Drupal\Core\Config\ConfigFactoryInterface;
 use Drupal\Core\Extension\ModuleHandlerInterface;
 use Symfony\Component\DependencyInjection\ContainerInterface;
 
+/**
+ * Configure Bot Guard settings.
+ */
 class SettingsForm extends ConfigFormBase {
 
   /**
@@ -19,10 +23,13 @@ class SettingsForm extends ConfigFormBase {
   /**
    * Constructs a SettingsForm object.
    *
+   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
+   *   The config factory service.
    * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
    *   The module handler service.
    */
-  public function __construct(ModuleHandlerInterface $module_handler) {
+  public function __construct(ConfigFactoryInterface $config_factory, ModuleHandlerInterface $module_handler) {
+    parent::__construct($config_factory);
     $this->moduleHandler = $module_handler;
   }
 
@@ -31,18 +38,28 @@ class SettingsForm extends ConfigFormBase {
    */
   public static function create(ContainerInterface $container) {
     return new static(
+      $container->get('config.factory'),
       $container->get('module_handler')
     );
   }
 
+  /**
+   * {@inheritdoc}
+   */
   protected function getEditableConfigNames(): array {
     return ['bot_guard.settings'];
   }
 
+  /**
+   * {@inheritdoc}
+   */
   public function getFormId(): string {
     return 'bot_guard_settings_form';
   }
 
+  /**
+   * {@inheritdoc}
+   */
   public function buildForm(array $form, FormStateInterface $form_state): array {
     $config = $this->config('bot_guard.settings');
 
@@ -52,11 +69,20 @@ class SettingsForm extends ConfigFormBase {
       '#default_value' => $config->get('enabled') ?? TRUE,
     ];
 
+    $form['allow_ips'] = [
+      '#type' => 'textarea',
+      '#title' => 'IP Allow-list (CIDR notation, one per line)',
+      '#default_value' => $config->get('allow_ips') ??
+        "127.0.0.1\n::1\n10.0.0.0/8\n172.16.0.0/12\n192.168.0.0/16",
+      '#description' => 'IP addresses or ranges to allow (bypass all checks). Default includes localhost and private IP ranges (RFC 1918).',
+    ];
+
     $form['allow_bots'] = [
       '#type' => 'textarea',
       '#title' => 'Allow-list (regex, one per line)',
-      '#default_value' => $config->get('allow_bots') ?? "Googlebot\nBingbot\nDuckDuckBot\nApplebot\nUptimeRobot\nUptime-Kuma",
-      '#description' => 'UA patterns allowed.',
+      '#default_value' => $config->get('allow_bots') ??
+        "Googlebot\nBingbot\nDuckDuckBot\nApplebot\nUptimeRobot\nUptime-Kuma",
+      '#description' => 'UA patterns to allow (bypass all checks).',
     ];
 
     $form['block_bots'] = [
@@ -238,9 +264,13 @@ class SettingsForm extends ConfigFormBase {
     return parent::buildForm($form, $form_state);
   }
 
+  /**
+   * {@inheritdoc}
+   */
   public function submitForm(array &$form, FormStateInterface $form_state): void {
     $config = $this->config('bot_guard.settings')
       ->set('enabled', $form_state->getValue('enabled'))
+      ->set('allow_ips', $form_state->getValue('allow_ips'))
       ->set('allow_bots', $form_state->getValue('allow_bots'))
       ->set('block_bots', $form_state->getValue('block_bots'))
       ->set('rate_limit', $form_state->getValue('rate_limit'))
