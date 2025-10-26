@@ -1,0 +1,16 @@
+{
+    "name": "drupal/bot_guard",
+    "description": "Provides a lightweight, high-performance defense against common bots, scrapers, and other forms of malicious traffic.",
+    "type": "drupal-module",
+    "license": "GPL-2.0-or-later",
+    "authors": [
+        {
+            "name": "Aussenposten fuer Digitales GmbH & Co. KG",
+            "email": "mail@aussenposten.de"
+        }
+    ],
+    "minimum-stability": "dev",
+    "require": {
+        "drupal/core": "^9 || ^10 || ^11"
+    }
+}
