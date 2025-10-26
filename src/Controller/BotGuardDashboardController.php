@@ -281,7 +281,6 @@ class BotGuardDashboardController extends ControllerBase {
       'no-accept-language',
       'facet-limit',
       'facet-flood-ban',
-      'lang-block',
       'ratelimit',
       'method-block',
     ];
@@ -314,7 +313,6 @@ class BotGuardDashboardController extends ControllerBase {
       'no-accept-language',
       'facet-limit',
       'facet-flood-ban',
-      'lang-block',
       'ratelimit',
       'method-block',
     ];
@@ -379,7 +377,6 @@ class BotGuardDashboardController extends ControllerBase {
       'no-accept-language' => $this->t('Missing Accept-Language Header'),
       'facet-limit' => $this->t('Facet Parameter Limit Exceeded'),
       'facet-flood-ban' => $this->t('Facet Flood Pattern Detected'),
-      'lang-block' => $this->t('Language Gate Block'),
       'ratelimit' => $this->t('Rate Limit Exceeded'),
       'method-block' => $this->t('HTTP Method Block'),
     ];

@@ -40,8 +40,6 @@ block_bots: |
   crawler
   spider
   scraper
-language_gate_paths: ""
-language_allow: '\bde(-(DE|AT|CH))?\b'
 rate_limit: 20
 rate_window: 10
 

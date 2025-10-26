@@ -277,22 +277,6 @@ class BotGuardSubscriber implements EventSubscriberInterface {
       }
     }
 
-    // ---- Language gate (optional) -----------------------------------------
-    $langPaths = (string) $config->get('language_gate_paths');
-    if ($langPaths) {
-      foreach (preg_split('/\R+/', $langPaths) as $p) {
-        $p = trim($p);
-        if ($p !== '' && @preg_match("~$p~i", '') !== FALSE && preg_match("~$p~i", $path)) {
-          $langAllow = (string) ($config->get('language_allow') ?? '\bde(-(DE|AT|CH))?\b');
-          if (!preg_match("~$langAllow~i", $al)) {
-            $this->storeDecision($cacheEnabled, $cacheKey, self::BLOCK, $cacheTtl);
-            $this->deny($event, $config, $ip, $ua, $path, 'lang-block');
-            return;
-          }
-        }
-      }
-    }
-
     // ---- Rate limit (APCu only; skip if not available) --------------------
     $max = (int) ($config->get('rate_limit') ?? 20);
     $win = (int) ($config->get('rate_window') ?? 10);

@@ -70,19 +70,6 @@ class SettingsForm extends ConfigFormBase {
       '#description' => 'UA patterns to block.',
     ];
 
-    $form['language_gate_paths'] = [
-      '#type' => 'textarea',
-      '#title' => 'Language-gate paths (regex per line)',
-      '#default_value' => $config->get('language_gate_paths') ?? "",
-      '#description' => 'Optional. Example: ^/vorgaenge',
-    ];
-
-    $form['language_allow'] = [
-      '#type' => 'textfield',
-      '#title' => 'Allowed Accept-Language regex',
-      '#default_value' => $config->get('language_allow') ?? '\bde(-(DE|AT|CH))?\b',
-    ];
-
     // Rate Limiting.
     $form['rate_limiting'] = [
       '#type' => 'details',
@@ -256,8 +243,6 @@ class SettingsForm extends ConfigFormBase {
       ->set('enabled', $form_state->getValue('enabled'))
       ->set('allow_bots', $form_state->getValue('allow_bots'))
       ->set('block_bots', $form_state->getValue('block_bots'))
-      ->set('language_gate_paths', $form_state->getValue('language_gate_paths'))
-      ->set('language_allow', $form_state->getValue('language_allow'))
       ->set('rate_limit', $form_state->getValue('rate_limit'))
       ->set('rate_window', $form_state->getValue('rate_window'))
       ->set('challenge_enabled', $form_state->getValue('challenge_enabled'))

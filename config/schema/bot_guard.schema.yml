@@ -11,12 +11,6 @@ bot_guard.settings:
     block_bots:
       type: text
       label: 'Block-list regex (one per line)'
-    language_gate_paths:
-      type: text
-      label: 'Language-gate paths (regex per line)'
-    language_allow:
-      type: string
-      label: 'Allowed Accept-Language regex'
     rate_limit:
       type: integer
       label: 'Rate-limit hits (per window)'
