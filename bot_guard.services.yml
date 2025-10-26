@@ -1,0 +1,11 @@
+services:
+  bot_guard.subscriber:
+    class: Drupal\bot_guard\EventSubscriber\BotGuardSubscriber
+    arguments:
+      - '@config.factory'
+      - '@current_user'
+      - '@module_handler'
+      - '@cache.default'
+      - '@datetime.time'
+    tags:
+      - { name: event_subscriber }

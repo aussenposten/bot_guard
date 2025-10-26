@@ -1,0 +1,15 @@
+bot_guard.settings:
+  path: '/admin/config/system/bot-guard'
+  defaults:
+    _form: '\Drupal\bot_guard\Form\SettingsForm'
+    _title: 'Bot Guard'
+  requirements:
+    _permission: 'access bot guard settings'
+
+bot_guard.dashboard:
+  path: '/admin/reports/bot-guard'
+  defaults:
+    _controller: '\Drupal\bot_guard\Controller\BotGuardDashboardController::dashboard'
+    _title: 'Bot Guard Metrics'
+  requirements:
+    _permission: 'access bot guard settings'

@@ -1,0 +1,83 @@
+bot_guard.settings:
+  type: config_object
+  label: 'Bot Guard settings'
+  mapping:
+    enabled:
+      type: boolean
+      label: 'Enable Bot Guard'
+    allow_bots:
+      type: text
+      label: 'Allow-list regex (one per line)'
+    block_bots:
+      type: text
+      label: 'Block-list regex (one per line)'
+    language_gate_paths:
+      type: text
+      label: 'Language-gate paths (regex per line)'
+    language_allow:
+      type: string
+      label: 'Allowed Accept-Language regex'
+    rate_limit:
+      type: integer
+      label: 'Rate-limit hits (per window)'
+    rate_window:
+      type: integer
+      label: 'Rate-limit window (seconds)'
+
+    # Error responses
+    block_status_code:
+      type: string
+      label: 'Default block status code'
+    block_message:
+      type: text
+      label: 'Default block message'
+    ratelimit_status_code:
+      type: string
+      label: 'Rate limit status code'
+    ratelimit_message:
+      type: text
+      label: 'Rate limit message'
+    ratelimit_retry_after:
+      type: integer
+      label: 'Retry-After header seconds'
+
+    # Cookie challenge
+    challenge_enabled:
+      type: boolean
+      label: 'Enable cookie challenge'
+    cookie_name:
+      type: string
+      label: 'Cookie name'
+    cookie_ttl:
+      type: integer
+      label: 'Cookie TTL seconds'
+
+    # Decision cache
+    cache_enabled:
+      type: boolean
+      label: 'Enable decision caching (APCu)'
+    cache_ttl:
+      type: integer
+      label: 'Decision cache TTL (seconds)'
+
+    # Facet controls
+    facet_enabled:
+      type: boolean
+      label: 'Enable facet parameter limit'
+    facet_limit:
+      type: integer
+      label: 'Facet parameter limit'
+
+    # Facet flood controls
+    facet_flood_enabled:
+      type: boolean
+      label: 'Enable facet flood detection'
+    facet_flood_threshold:
+      type: integer
+      label: 'Facet flood threshold (unique signatures per window)'
+    facet_flood_window:
+      type: integer
+      label: 'Facet flood window seconds'
+    facet_flood_ban:
+      type: integer
+      label: 'Facet flood temporary ban seconds'

@@ -1,0 +1,72 @@
+enabled: true
+allow_bots: |
+  Googlebot
+  Bingbot
+  DuckDuckBot
+  Applebot
+  UptimeRobot
+  Uptime-Kuma
+block_bots: |
+  GPTBot
+  Perplexity(Bot|Crawler)
+  ClaudeBot
+  Bytespider
+  Amazonbot
+  Meta-ExternalAgent
+  Google-Extended
+  AhrefsBot
+  SemrushBot
+  MJ12bot
+  DotBot
+  DataForSeoBot
+  spbot
+  ia_archiver
+  Screaming Frog
+  Seobility
+  SeznamBot
+  curl
+  wget
+  python-requests
+  httpclient
+  Go-http-client
+  libwww-perl
+  Java/
+  Ruby
+  PHP/
+  node-fetch
+  aiohttp
+  okhttp
+  (?<!Google)bot
+  crawler
+  spider
+  scraper
+language_gate_paths: ""
+language_allow: '\bde(-(DE|AT|CH))?\b'
+rate_limit: 20
+rate_window: 10
+
+# Error responses
+block_status_code: '404'
+block_message: '<h1>Access Denied</h1><p>Your request was blocked.</p>'
+ratelimit_status_code: '429'
+ratelimit_message: '<h1>Too Many Requests</h1><p>Please slow down.</p>'
+ratelimit_retry_after: 30
+
+# Cookie challenge
+challenge_enabled: true
+cookie_name: bg_chal
+cookie_ttl: 86400
+
+# Decision cache
+cache_enabled: true
+cache_ttl: 300
+
+# Facet
+facet_enabled: true
+facet_limit: 5
+
+# Facet flood
+facet_flood_enabled: true
+facet_flood_threshold: 20
+facet_flood_window: 600
+facet_flood_ban: 1800

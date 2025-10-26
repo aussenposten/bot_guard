@@ -1,0 +1,13 @@
+bot_guard.settings:
+  title: 'Bot Guard'
+  description: 'Configure bot / crawler mitigation'
+  parent: system.admin_config_system
+  route_name: bot_guard.settings
+  weight: 100
+
+bot_guard.dashboard:
+  title: 'Bot Guard Dashboard'
+  description: 'Bot Guard blocking metrics and statistics'
+  parent: system.admin_reports
+  route_name: bot_guard.dashboard
+  weight: 100

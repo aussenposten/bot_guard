@@ -1,0 +1,7 @@
+access bot guard settings:
+  title: 'Configure Bot Guard'
+  description: 'Access and configure bot guard settings'
+
+bypass bot guard:
+  title: 'Bypass Bot Guard'
+  description: 'Allow users to bypass the bot guard.'

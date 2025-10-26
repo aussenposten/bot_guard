@@ -1,0 +1,5 @@
+name: Bot Guard
+type: module
+description: Lightweight early bot mitigation (AI/SEO scrapers, headless, botnets) with cookie challenge.
+core_version_requirement: ^9 || ^10 || ^11
+package: Performance
