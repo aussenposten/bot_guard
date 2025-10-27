@@ -240,7 +240,9 @@ class BotGuardSubscriber implements EventSubscriberInterface {
     // Facet Bot Blocking.
     if ($this->moduleHandler->moduleExists('facets')) {
       $facetEnabled = (bool) ($config->get('facet_enabled') ?? TRUE);
-      if ($facetEnabled && isset($_GET['f']) && is_array($_GET['f'])) {
+      $facet_params = $this->getFacetParams($request);
+
+      if ($facetEnabled && !empty($facet_params)) {
         $limit = (int) ($config->get('facet_limit') ?? 2);
 
         // Metrics (allowed/blocked + start time) using default cache bin.
@@ -249,7 +251,7 @@ class BotGuardSubscriber implements EventSubscriberInterface {
           $cache->set('facet_bot.metrics_start', time());
         }
 
-        if (count($_GET['f']) > $limit) {
+        if (count($facet_params) > $limit) {
           // Count blocked.
           $blocked = $cache->get('facet_bot.blocked');
           $blocked_count = $blocked ? (int) $blocked->data : 0;
@@ -260,7 +262,7 @@ class BotGuardSubscriber implements EventSubscriberInterface {
             'ip' => $ip,
             'path' => $request->getUri(),
             'ua' => $ua,
-            'params' => $_GET['f'],
+            'params' => $facet_params,
           ]);
 
           // Use centralized error response configuration.
@@ -290,7 +292,7 @@ class BotGuardSubscriber implements EventSubscriberInterface {
           }
 
           // Compute fingerprint for current facet combination.
-          $sig = $this->facetFingerprint($_GET['f']);
+          $sig = $this->facetFingerprint($facet_params);
 
           // Load or initialize rolling window for this IP.
           $key = 'bg_ffp_' . sha1($ip);
@@ -690,6 +692,36 @@ class BotGuardSubscriber implements EventSubscriberInterface {
     }
 
     return sha1(json_encode([$keys, $values]));
+  }
+
+  /**
+   * Get facet parameters from the query string.
+   *
+   * Detects both `f[...]=...` and `1=...` style parameters.
+   *
+   * @param \Symfony\Component\HttpFoundation\Request $request
+   *   The current request.
+   *
+   * @return array
+   *   An array of facet parameters found in the query string.
+   */
+  private function getFacetParams($request): array {
+    $query_params = $request->query->all();
+    $facet_params = [];
+
+    // The `f` parameter is the standard way facets are passed.
+    if (isset($query_params['f']) && is_array($query_params['f'])) {
+      $facet_params = $query_params['f'];
+    }
+
+    // Some bots use numeric keys instead of the `f` parameter.
+    foreach ($query_params as $key => $value) {
+      if (is_numeric($key)) {
+        $facet_params[] = $value;
+      }
+    }
+
+    return $facet_params;
   }
 
   /**
