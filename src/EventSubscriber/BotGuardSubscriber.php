@@ -218,23 +218,25 @@ class BotGuardSubscriber implements EventSubscriberInterface {
     // Cookie challenge.
     $challengeEnabled = (bool) ($config->get('challenge_enabled') ?? TRUE);
     if ($challengeEnabled) {
-      // Only challenge for GET/HEAD; let POST/PUT be blocked (404) if not allowed bot.
-      if (in_array($method, ['GET', 'HEAD'], TRUE)) {
-        $cookieName = (string) ($config->get('cookie_name') ?? 'bg_chal');
-        $cookieTtl = (int) ($config->get('cookie_ttl') ?? 86400);
+      $cookieName = (string) ($config->get('cookie_name') ?? 'bg_chal');
+      $cookieTtl = (int) ($config->get('cookie_ttl') ?? 86400);
 
-        if (!$this->hasValidChallengeCookie($request->cookies->get($cookieName), $ip, $ua)) {
+      // If no valid challenge cookie is present, take action.
+      if (!$this->hasValidChallengeCookie($request->cookies->get($cookieName), $ip, $ua)) {
+        // For GET/HEAD requests, serve the JS challenge to the browser.
+        if (in_array($method, ['GET', 'HEAD'], TRUE)) {
           $this->storeDecision($cacheEnabled, $cacheKey, self::CHALLENGE_PENDING, $cacheTtl);
           $this->serveChallenge($event, $cookieName, $cookieTtl, $ip, $ua);
           return;
         }
+        // For other methods like POST, block if no valid cookie is present.
+        else {
+          $this->storeDecision($cacheEnabled, $cacheKey, self::BLOCK, $cacheTtl);
+          $this->deny($event, $config, $ip, $ua, $path, 'method-block');
+          return;
+        }
       }
-      else {
-        // Non-GET without valid challenge → deny 404 (cheap protection)
-        $this->storeDecision($cacheEnabled, $cacheKey, self::BLOCK, $cacheTtl);
-        $this->deny($event, $config, $ip, $ua, $path, 'method-block');
-        return;
-      }
+      // If a valid cookie exists, the request proceeds.
     }
 
     // Facet Bot Blocking.
