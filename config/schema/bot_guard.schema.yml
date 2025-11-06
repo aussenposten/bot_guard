@@ -38,6 +38,11 @@ bot_guard.settings:
       type: integer
       label: 'Retry-After header seconds'
 
+    # Screen resolution check
+    resolution_check_enabled:
+      type: boolean
+      label: 'Enable screen resolution check'
+
     # Cookie challenge
     challenge_enabled:
       type: boolean

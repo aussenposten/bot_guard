@@ -54,6 +54,13 @@ class BotGuardSubscriber implements EventSubscriberInterface {
   protected $time;
 
   /**
+   * The screen resolution from the client.
+   *
+   * @var string
+   */
+  protected $screenResolution = '';
+
+  /**
    * Cache decision state: Allow the request.
    *
    * @var int
@@ -140,6 +147,7 @@ class BotGuardSubscriber implements EventSubscriberInterface {
     $path = $request->getPathInfo();
     $ip = $request->getClientIp() ?? '0.0.0.0';
     $method = $request->getMethod();
+    $this->screenResolution = $request->cookies->get('bg_scr', '');
 
     // IP Allow-list (bypass all checks).
     $allowIps = (string) $config->get('allow_ips');
@@ -195,6 +203,14 @@ class BotGuardSubscriber implements EventSubscriberInterface {
     if ($request->headers->get('Accept-Language') === NULL || $request->headers->get('Accept-Language') === '') {
       $this->storeDecision($cacheEnabled, $cacheKey, self::BLOCK, $cacheTtl);
       $this->deny($event, $config, $ip, $ua, $path, 'no-accept-language');
+      return;
+    }
+
+    // Suspicious screen resolution.
+    $resolutionCheckEnabled = (bool) ($config->get('resolution_check_enabled') ?? TRUE);
+    if ($resolutionCheckEnabled && $this->isSuspiciousScreenResolution($ua, $this->screenResolution)) {
+      $this->storeDecision($cacheEnabled, $cacheKey, self::BLOCK, $cacheTtl);
+      $this->deny($event, $config, $ip, $ua, $path, 'suspicious-resolution');
       return;
     }
 
@@ -602,6 +618,7 @@ class BotGuardSubscriber implements EventSubscriberInterface {
       '<noscript>JavaScript required.</noscript>' .
       '<script>(function(){try{' .
       'var d=new Date(' . ($exp * 1000) . ');' .
+      'var res=screen.width+"x"+screen.height;document.cookie="bg_scr="+res+";path=/;expires="+d.toUTCString()+";SameSite=Lax";' .
       'document.cookie=' . json_encode($cookieName) . '+\'=' . $val . ';path=/;expires=\'+d.toUTCString()+' .
       '\';SameSite=Lax\';location.reload();}catch(e){}})();</script>' .
       '</body></html>';
@@ -810,6 +827,60 @@ class BotGuardSubscriber implements EventSubscriberInterface {
       $allowed = apcu_fetch('bg.allowed.count');
       apcu_store('bg.allowed.count', ($allowed === FALSE ? 1 : ((int) $allowed) + 1), 0);
     }
+  }
+
+  /**
+   * Check for suspicious screen resolution / user agent combinations.
+   *
+   * @param string $ua
+   *   The client User-Agent string.
+   * @param string $resolution
+   *   The client screen resolution (e.g., "1920x1080").
+   *
+   * @return bool
+   *   TRUE if the combination is suspicious, FALSE otherwise.
+   */
+  private function isSuspiciousScreenResolution(string $ua, string $resolution): bool {
+    // An empty resolution is highly suspicious, as it indicates that the JS
+    // challenge was likely not executed. This is a strong signal for a bot.
+    if (empty($resolution) || !str_contains($resolution, 'x')) {
+      return TRUE;
+    }
+
+    [$width, $height] = explode('x', $resolution, 2);
+    $width = (int) $width;
+    $height = (int) $height;
+
+    // Invalid or zero resolutions are also a strong indicator of a non-browser client.
+    if ($width <= 100 || $height <= 100) {
+      return TRUE;
+    }
+
+    // Distinguish between device types based on User-Agent.
+    $isTablet = preg_match('/(iPad|Tablet|Android(?!.*Mobi))/i', $ua);
+    $isPhone = preg_match('/(Mobi|Android.*Mobi|iPhone|iPod)/i', $ua);
+    $isDesktop = !$isTablet && !$isPhone;
+
+    // --- Define suspicious scenarios ---
+
+    // 1. Desktop UA with a very small, phone-like resolution.
+    if ($isDesktop && ($width < 1024 || $height < 768)) {
+      return TRUE;
+    }
+
+    // 2. Phone UA with a very large, desktop-like resolution.
+    // Modern phones have high pixel density, but their logical width in JS is usually < 980px.
+    if ($isPhone && $width > 980) {
+      return TRUE;
+    }
+
+    // 3. Tablet UA with an unlikely resolution (either too small or excessively large).
+    if ($isTablet && (($width < 768 && $height < 1024) || $width > 2048)) {
+      return TRUE;
+    }
+
+    // All other combinations are considered valid.
+    return FALSE;
   }
 
   private function ipInCidr(string $ip, string $cidr): bool {

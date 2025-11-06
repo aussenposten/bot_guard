@@ -168,6 +168,19 @@ class SettingsForm extends ConfigFormBase {
       '#description' => 'Value for Retry-After header in rate limit responses.',
     ];
 
+    // Screen Resolution Check.
+    $form['resolution_check'] = [
+      '#type' => 'details',
+      '#title' => 'Screen Resolution Check',
+      '#open' => TRUE,
+    ];
+    $form['resolution_check']['resolution_check_enabled'] = [
+      '#type' => 'checkbox',
+      '#title' => 'Enable screen resolution check',
+      '#default_value' => $config->get('resolution_check_enabled') ?? TRUE,
+      '#description' => 'Blocks requests with missing or suspicious screen resolutions (e.g., desktop UA with mobile resolution).',
+    ];
+
     // Cookie Challenge.
     $form['cookie_challenge'] = [
       '#type' => 'details',
@@ -284,7 +297,8 @@ class SettingsForm extends ConfigFormBase {
       ->set('block_message', $form_state->getValue('block_message'))
       ->set('ratelimit_status_code', $form_state->getValue('ratelimit_status_code'))
       ->set('ratelimit_message', $form_state->getValue('ratelimit_message'))
-      ->set('ratelimit_retry_after', $form_state->getValue('ratelimit_retry_after'));
+      ->set('ratelimit_retry_after', $form_state->getValue('ratelimit_retry_after'))
+      ->set('resolution_check_enabled', $form_state->getValue('resolution_check_enabled'));
 
     // Only save facet settings if Facet module is installed.
     if ($this->moduleHandler->moduleExists('facets')) {

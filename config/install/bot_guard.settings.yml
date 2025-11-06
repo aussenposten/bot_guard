@@ -56,6 +56,9 @@ ratelimit_status_code: '429'
 ratelimit_message: '<h1>Too Many Requests</h1><p>Please slow down.</p>'
 ratelimit_retry_after: 30
 
+# Screen resolution check
+resolution_check_enabled: true
+
 # Cookie challenge
 challenge_enabled: true
 cookie_name: bg_chal
