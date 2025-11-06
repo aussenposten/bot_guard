@@ -8,6 +8,9 @@ bot_guard.settings:
     allow_ips:
       type: text
       label: 'IP Allow-list (CIDR notation, one per line)'
+    allow_paths:
+      type: text
+      label: 'Path Allow-list (one per line)'
     allow_bots:
       type: text
       label: 'Allow-list regex (one per line)'

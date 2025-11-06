@@ -77,6 +77,13 @@ class SettingsForm extends ConfigFormBase {
       '#description' => 'IP addresses or ranges to allow (bypass all checks). Default includes localhost and private IP ranges (RFC 1918).',
     ];
 
+    $form['allow_paths'] = [
+      '#type' => 'textarea',
+      '#title' => 'Path Allow-list (one per line)',
+      '#default_value' => $config->get('allow_paths') ?? '',
+      '#description' => 'URL paths to allow (bypass all checks). E.g., /api/v1/endpoint. Wildcards are not supported, but you can use regex-like patterns since the check is done via preg_match.',
+    ];
+
     $form['allow_bots'] = [
       '#type' => 'textarea',
       '#title' => 'Allow-list (regex, one per line)',
@@ -284,6 +291,7 @@ class SettingsForm extends ConfigFormBase {
     $config = $this->config('bot_guard.settings')
       ->set('enabled', $form_state->getValue('enabled'))
       ->set('allow_ips', $form_state->getValue('allow_ips'))
+      ->set('allow_paths', $form_state->getValue('allow_paths'))
       ->set('allow_bots', $form_state->getValue('allow_bots'))
       ->set('block_bots', $form_state->getValue('block_bots'))
       ->set('rate_limit', $form_state->getValue('rate_limit'))

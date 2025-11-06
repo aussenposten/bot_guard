@@ -155,6 +155,12 @@ class BotGuardSubscriber implements EventSubscriberInterface {
       return;
     }
 
+    // Path Allow-list (bypass all checks).
+    $allowPaths = (string) $config->get('allow_paths');
+    if ($allowPaths && $this->matchesAny($path, $allowPaths)) {
+      return;
+    }
+
     // Decision cache.
     $cacheEnabled = (bool) $config->get('cache_enabled');
     $cacheTtl = (int) ($config->get('cache_ttl') ?? 300);
