@@ -17,16 +17,6 @@ Bot Guard inspects each incoming request and processes it through a sequence of 
 
 A request is blocked as soon as it fails one of these checks. If it passes all of them, it is allowed to proceed to Drupal.
 
-### Challenge Flow
-
-When a client without a valid challenge cookie makes a request, Bot Guard serves a JavaScript challenge page. The client must:
-1. Solve a proof-of-work puzzle (if enabled)
-2. Collect screen resolution data
-3. Create a signed cookie with the solution
-4. Reload the page with the valid cookie
-
-This multi-factor validation ensures that only genuine browsers with JavaScript support can access the site. For detailed technical information, see [PROOF_OF_WORK.md](PROOF_OF_WORK.md).
-
 ## Features
 
 - **High-Performance Defense:** Uses APCu for fast, in-memory caching and rate limiting to minimize performance impact.
@@ -150,51 +140,6 @@ The dashboard tracks various block reasons:
 - **Facet Flood Pattern Detected:** Excessive unique facet combinations
 - And more...
 
-## Best Practices
-
-### Proof-of-Work Configuration
-
-**Recommended Settings:**
-- **Default (difficulty 3):** Suitable for most sites, minimal user impact
-- **High traffic:** Keep at 3-4 to avoid frustrating legitimate users
-- **Under attack:** Increase to 4-5, monitor "Challenge Failed" metrics
-- **Maximum protection:** Difficulty 5+ only if absolutely necessary
-
-**Important:** Always add known legitimate IPs to the allow-list to bypass challenges entirely.
-
-### Screen Resolution Check
-
-The screen resolution check is effective at catching:
-- **Headless browsers** (Puppeteer, Selenium) with default resolutions (800x600, 1280x720)
-- **Phone UAs with desktop resolutions** (spoofed or misconfigured)
-- **Extremely unusual resolutions** that don't exist in real devices (< 320px, > 4000px)
-- **Impossible aspect ratios** (too narrow or too wide)
-
-**Limitations:**
-- iPads with Safari report as "Macintosh" (desktop UA), so they're not distinguishable from small laptops
-- The check is intentionally permissive to avoid false positives
-- Focus is on catching obvious automation tools, not precise device type validation
-
-### Allow-lists
-
-Always add to IP allow-list:
-- Your own office/home IPs
-- Monitoring services (UptimeRobot, etc.)
-- Known API clients
-- CI/CD systems
-
-Always add to UA allow-list:
-- Legitimate search engine bots (Googlebot, Bingbot)
-- Social media crawlers (if you want social sharing previews)
-- Monitoring bots
-
-### Performance Optimization
-
-1. **Enable Decision Caching:** Caches allow/block decisions to reduce repeated checks
-2. **Use Persistent Cache:** Install Redis or Memcache for metrics that survive server restarts
-3. **Tune Rate Limiting:** Adjust rate limits based on your traffic patterns
-4. **Monitor Dashboard:** Regularly check for false positives
-
 ### Troubleshooting
 
 **Legitimate Users Being Blocked:**
@@ -215,16 +160,3 @@ Always add to UA allow-list:
 **No Metrics Showing:**
 - Ensure APCu is installed: `php -i | grep apcu`
 - Consider Redis/Memcache for persistent metrics
-
-## Advanced Topics
-
-### Proof-of-Work Deep Dive
-
-For detailed information about the proof-of-work implementation, including:
-- How the challenge generation works
-- Security considerations
-- Performance impact analysis
-- Browser compatibility details
-- Comparison to Anubis
-
-See the dedicated documentation: **[PROOF_OF_WORK.md](PROOF_OF_WORK.md)**
