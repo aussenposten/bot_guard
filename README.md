@@ -19,20 +19,13 @@ A request is blocked as soon as it fails one of these checks. If it passes all o
 
 ### Challenge Flow
 
-When a client without a valid challenge cookie makes a GET/HEAD request:
+When a client without a valid challenge cookie makes a request, Bot Guard serves a JavaScript challenge page. The client must:
+1. Solve a proof-of-work puzzle (if enabled)
+2. Collect screen resolution data
+3. Create a signed cookie with the solution
+4. Reload the page with the valid cookie
 
-1. **Server generates challenge:** Creates a unique SHA-256 challenge based on IP, User-Agent, timestamp, and server salt
-2. **Client receives challenge page:** A minimal HTML page with embedded JavaScript and Web Worker
-3. **Proof-of-Work computation:** Web Worker iteratively computes `SHA-256(challenge + nonce)` until finding a hash with the required leading zeros
-4. **Cookie creation:** Client creates a signed cookie containing:
-   - Timestamp and expiration
-   - Screen resolution
-   - Proof-of-work solution (challenge, nonce, hash)
-5. **Page reload:** Client reloads with the valid cookie
-6. **Server validation:** Verifies signature, expiration, proof-of-work, and screen resolution
-7. **Access granted:** Request proceeds to Drupal
-
-This multi-factor validation ensures that only genuine browsers with JavaScript support and computational capability can access the site.
+This multi-factor validation ensures that only genuine browsers with JavaScript support can access the site. For detailed technical information, see [PROOF_OF_WORK.md](PROOF_OF_WORK.md).
 
 ## Features
 
@@ -40,7 +33,7 @@ This multi-factor validation ensures that only genuine browsers with JavaScript 
 - **IP & User-Agent Filtering:** Supports allow-lists for IPs (with CIDR notation) and allow/block-lists for User-Agent strings (using regex).
 - **Heuristic Analysis:** Blocks requests with suspicious characteristics common to low-quality bots.
 - **JavaScript Cookie Challenge:** A stateless, signed cookie challenge effectively filters out bots that don't execute JavaScript.
-- **Proof-of-Work Challenge:** Anubis-style SHA-256 proof-of-work system that requires clients to solve computational puzzles, making automated scraping prohibitively expensive while having minimal impact on legitimate users.
+- **Proof-of-Work Challenge:** SHA-256 computational challenge that makes automated scraping expensive while having minimal impact on legitimate users.
 - **Screen Resolution Check:** Detects headless browsers and automation tools by identifying obviously fake resolutions, impossible aspect ratios, and common automation defaults (800x600, 1280x720).
 - **Facet Protection:** Prevents denial-of-service attacks via excessive facet parameter combinations.
 - **Statistics Dashboard:** A real-time dashboard to monitor traffic and analyze block reasons.
@@ -53,19 +46,7 @@ This multi-factor validation ensures that only genuine browsers with JavaScript 
 - **(Optional) Redis or Memcache:** Recommended for persistent metrics across server restarts
 
 ### Browser Requirements (for Proof-of-Work)
-When proof-of-work is enabled, clients need:
-- **Web Workers:** For background computation
-- **SubtleCrypto API:** For SHA-256 hashing
-- **JavaScript ES6+:** Async/await, arrow functions
-
-**Supported Browsers:**
-- ✅ Chrome/Edge 37+
-- ✅ Firefox 34+
-- ✅ Safari 11.1+
-- ✅ Opera 24+
-- ❌ Internet Explorer (no SubtleCrypto support)
-
-**Note:** If a browser doesn't support these features, the challenge will fail and the user will see an error message. Consider disabling proof-of-work if you need to support older browsers.
+When proof-of-work is enabled, clients need modern browser features (Web Workers, SubtleCrypto API). Supported: Chrome 37+, Firefox 34+, Safari 11.1+, Opera 24+. Internet Explorer is not supported. See [PROOF_OF_WORK.md](PROOF_OF_WORK.md) for details.
 
 ## Installation
 
@@ -90,16 +71,16 @@ All features are configurable at **Administration > Configuration > System > Bot
 - **Cookie TTL:** How long the cookie remains valid (default: 24 hours)
 
 #### Proof-of-Work Challenge
-- **Enable proof-of-work:** Toggle Anubis-style computational challenge
-- **Difficulty:** Number of leading zeros required in SHA-256 hash (3-5, default: 3)
-  - **3:** Very fast (~0.1-0.5s, ~4K attempts) - **recommended default**
-  - **4:** Fast (~1-3s, ~65K attempts) - balanced security/UX
-  - **5:** Slow (~10-30s, ~1M attempts) - maximum protection, impacts UX
-  - **6+:** Not recommended (>30s, often triggers timeout)
-- **Maximum iterations:** Safety limit to prevent infinite loops (default: 10M)
-- **Client timeout:** Maximum time allowed for solving (default: 60 seconds)
+- **Enable proof-of-work:** Toggle computational challenge
+- **Difficulty:** Number of leading zeros required in SHA-256 hash (default: 3)
+  - **3:** ~0.1-0.5s - **recommended for most sites**
+  - **4:** ~1-3s - balanced security/UX
+  - **5:** ~10-30s - maximum protection, impacts UX
+  - **6+:** Not recommended (often triggers timeout)
+- **Maximum iterations:** Safety limit (default: 10M)
+- **Client timeout:** Maximum solve time (default: 60s)
 
-**Note:** Difficulty scales exponentially - each level increases computation time by ~16x due to hexadecimal hash space. The proof-of-work challenge runs in a Web Worker, so it doesn't block the browser UI. See `PROOF_OF_WORK.md` for detailed documentation.
+**Note:** Difficulty scales exponentially (~16x per level). See [PROOF_OF_WORK.md](PROOF_OF_WORK.md) for detailed documentation.
 
 #### Screen Resolution Check
 - **Enable screen resolution check:** Detects obviously fake resolutions and headless browsers
@@ -173,19 +154,13 @@ The dashboard tracks various block reasons:
 
 ### Proof-of-Work Configuration
 
-**For High-Traffic Sites:**
-- Start with difficulty **4** to minimize impact on legitimate users
-- Monitor "Challenge Failed" metrics in the dashboard
-- Gradually increase difficulty if bot traffic persists
+**Recommended Settings:**
+- **Default (difficulty 3):** Suitable for most sites, minimal user impact
+- **High traffic:** Keep at 3-4 to avoid frustrating legitimate users
+- **Under attack:** Increase to 4-5, monitor "Challenge Failed" metrics
+- **Maximum protection:** Difficulty 5+ only if absolutely necessary
 
-**For Low-Traffic Sites:**
-- Use difficulty **5-6** for stronger protection
-- Higher difficulty has minimal impact when traffic is low
-
-**For Maximum Protection:**
-- Use difficulty **7** (expect 10-30 second solve times)
-- Only recommended if bot attacks are severe
-- Consider adding IP allow-list for known legitimate users
+**Important:** Always add known legitimate IPs to the allow-list to bypass challenges entirely.
 
 ### Screen Resolution Check
 
@@ -223,25 +198,23 @@ Always add to UA allow-list:
 ### Troubleshooting
 
 **Legitimate Users Being Blocked:**
-1. Ask the user to send you a screenshot of the error page (including the Reference token)
-2. Copy the reference token and paste it into the **Block Token Decoder** on the dashboard
-3. Review the decoded information to understand why they were blocked:
-   - **UA Block:** Add exception to allow-list or adjust block patterns
-   - **Challenge Failed:** Check if PoW difficulty is too high, or if they have JavaScript disabled
-   - **Suspicious Resolution:** May be a false positive (e.g., iPad Safari), consider disabling check
-   - **Rate Limit:** May be legitimate high-traffic user, add IP to allow-list
-4. Add their IP to allow-list temporarily while investigating
-5. Adjust configuration based on findings
+1. Get the reference token from the error page
+2. Decode it in the dashboard's **Block Token Decoder**
+3. Review the block reason:
+   - **UA Block:** Adjust allow-list or block patterns
+   - **Challenge Failed:** Lower PoW difficulty or check JavaScript support
+   - **Suspicious Resolution:** May be false positive, consider disabling
+   - **Rate Limit:** Add IP to allow-list
+4. Adjust configuration based on findings
 
 **High "Challenge Failed" Count:**
-- May indicate bot attacks (good!)
-- Or configuration too strict (check if legitimate users affected)
-- Review recent block events in dashboard for patterns
+- May indicate bot attacks (expected behavior)
+- Or difficulty too high (check if legitimate users affected)
+- Review recent block events for patterns
 
 **No Metrics Showing:**
-- Ensure APCu extension is installed and enabled
-- Check PHP configuration: `php -i | grep apcu`
-- Consider installing Redis/Memcache for persistent metrics
+- Ensure APCu is installed: `php -i | grep apcu`
+- Consider Redis/Memcache for persistent metrics
 
 ## Advanced Topics
 

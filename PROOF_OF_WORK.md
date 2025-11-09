@@ -2,7 +2,7 @@
 
 ## Overview
 
-This document describes the Anubis-style proof-of-work (PoW) challenge implementation in Bot Guard. The PoW challenge ensures that clients are using modern browsers capable of computing SHA-256 hashes, effectively blocking simple bots and scrapers.
+This document describes the proof-of-work (PoW) challenge implementation in Bot Guard. The PoW challenge requires clients to solve SHA-256 computational puzzles, making automated scraping expensive while having minimal impact on legitimate users with modern browsers.
 
 ## How It Works
 
@@ -40,19 +40,15 @@ This document describes the Anubis-style proof-of-work (PoW) challenge implement
 All settings are configurable via the Bot Guard admin UI at `/admin/config/system/bot-guard`:
 
 - **Enable proof-of-work challenge**: Toggle PoW on/off
-- **Difficulty (leading zeros)**: Number of leading zeros required (3-5)
-  - **3**: Very fast (~0.1-0.5s, ~4K attempts) - **Default: 3** - recommended for most sites
-  - **4**: Fast (~1-3s, ~65K attempts) - balanced security/UX
-  - **5**: Slow (~10-30s, ~1M attempts) - maximum protection, impacts UX
-  - **6+**: Not recommended (>30s, often triggers timeout)
-- **Maximum iterations**: Safety limit to prevent infinite loops (default: 10,000,000)
-- **Client timeout**: Maximum time allowed for solving (default: 60 seconds)
+- **Difficulty (leading zeros)**: Number of leading zeros required (default: 3)
+  - **3**: ~0.1-0.5s, ~4K attempts - **recommended for most sites**
+  - **4**: ~1-3s, ~65K attempts - balanced security/UX
+  - **5**: ~10-30s, ~1M attempts - maximum protection, impacts UX
+  - **6+**: Not recommended (often triggers timeout)
+- **Maximum iterations**: Safety limit to prevent infinite loops (default: 10M)
+- **Client timeout**: Maximum time allowed for solving (default: 60s)
 
-**Performance Note**: Difficulty scales exponentially with factor ~16x per level because SHA-256 produces hexadecimal output (16 possible values per character: 0-F). This means:
-- Difficulty 3 requires ~16³ = 4,096 attempts on average
-- Difficulty 4 requires ~16⁴ = 65,536 attempts on average
-- Difficulty 5 requires ~16⁵ = 1,048,576 attempts on average
-- Difficulty 6 requires ~16⁶ = 16,777,216 attempts on average (often exceeds timeout)
+**Note**: Difficulty scales exponentially (~16x per level) because SHA-256 produces hexadecimal output. Older devices may take 2-3x longer than the times shown above.
 
 ## Technical Details
 
@@ -106,11 +102,11 @@ Where payload is:
 
 ### Why Proof-of-Work?
 
-Inspired by Hashcash (early 2000s email spam prevention), PoW makes automated scraping expensive:
+Inspired by Hashcash (email spam prevention), PoW makes automated scraping expensive:
 
-- **Legitimate Users**: Solve one challenge, minimal impact (1-10 seconds)
+- **Legitimate Users**: Solve one challenge, minimal impact (see Configuration for solve times)
 - **Scrapers**: Must solve a challenge for every request, computationally prohibitive
-- **Modern Browsers**: All modern browsers support Web Workers and SubtleCrypto API
+- **Modern Browsers**: All modern browsers support required features (Web Workers, SubtleCrypto)
 
 ### Attack Vectors & Mitigations
 
@@ -138,14 +134,11 @@ Inspired by Hashcash (early 2000s email spam prevention), PoW makes automated sc
 
 ### Client-Side
 
-- **Difficulty 3** (default): ~0.1-0.5 seconds on modern hardware
-- **Difficulty 4**: ~1-3 seconds on modern hardware
-- **Difficulty 5**: ~10-30 seconds on modern hardware (may vary significantly)
-- **CPU Usage**: High during solving, but runs in Web Worker (non-blocking UI)
-- **Memory**: Minimal (~1-2 MB for worker)
+- **CPU Usage**: High during solving, runs in Web Worker (non-blocking UI)
+- **Memory**: Minimal (~1-2 MB)
 - **Battery**: Negligible for occasional challenges
 
-**Hardware Impact**: Actual solve times depend on CPU performance. Older devices or mobile browsers may take 2-3x longer. The exponential scaling (16x per difficulty level) means small increases in difficulty have dramatic performance impacts.
+**Solve Times**: See difficulty settings in the Configuration section above.
 
 ### Server-Side
 
@@ -167,7 +160,7 @@ Inspired by Hashcash (early 2000s email spam prevention), PoW makes automated sc
 - ✅ Firefox 34+
 - ✅ Safari 11.1+
 - ✅ Opera 24+
-- ❌ IE 11 and older (no SubtleCrypto support)
+- ❌ Internet Explorer (no SubtleCrypto support)
 
 ### Fallback Behavior
 
@@ -188,13 +181,15 @@ The PoW challenge works alongside other Bot Guard features:
 
 ## Comparison to Anubis
 
+Bot Guard's PoW implementation is inspired by [Anubis](https://github.com/TecharoHQ/anubis).
+
 ### Similarities
 
 - SHA-256 proof-of-work with configurable difficulty
 - Web Worker-based computation
 - Challenge derived from request metadata
-- JWT-like cookie with signature
-- Default difficulty of 3 leading zeros (Bot Guard uses lower default for better UX)
+- Signed cookie format
+- Default difficulty of 3 leading zeros
 
 ### Differences
 
@@ -210,10 +205,10 @@ The PoW challenge works alongside other Bot Guard features:
 
 ### Challenge Takes Too Long
 
-- **Reduce difficulty**: Lower to 3 (recommended default) or even 2 for very slow devices
-- **Increase timeout**: Give clients more time (default: 60s, can increase to 90-120s for difficulty 5)
-- **Check client hardware**: Older devices may struggle with difficulty 4+
-- **Consider disabling PoW**: For sites with many mobile/older device users, rely on other Bot Guard features instead
+- **Reduce difficulty**: Lower to 3 (recommended) or 2 for slow devices
+- **Increase timeout**: Default 60s, increase to 90-120s for difficulty 5
+- **Check client hardware**: Older devices struggle with difficulty 4+
+- **Consider disabling PoW**: For sites with many mobile/older device users
 
 ### Legitimate Users Blocked
 
@@ -229,14 +224,12 @@ The PoW challenge works alongside other Bot Guard features:
 
 ## Future Enhancements
 
-Potential improvements for future versions:
+Potential improvements:
 
 1. **Adaptive Difficulty**: Adjust based on client performance
-2. **Challenge Whitelisting**: Skip PoW for known-good clients
-3. **Alternative Algorithms**: Support for other hash functions
-4. **Distributed Key Management**: Share keys across multiple servers
-5. **Analytics**: Track solve times and success rates
-6. **CAPTCHA Fallback**: Alternative for incompatible browsers
+2. **Challenge Allowlisting**: Skip PoW for known-good clients
+3. **Analytics**: Track solve times and success rates
+4. **CAPTCHA Fallback**: Alternative for incompatible browsers
 
 ## References
 
