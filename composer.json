@@ -11,7 +11,9 @@
     ],
     "minimum-stability": "dev",
     "require": {
-        "drupal/core": "^9 || ^10 || ^11",
-        "apcu/apcu": "*"
+        "drupal/core": "^9 || ^10 || ^11"
+    },
+    "suggest": {
+        "ext-apcu": "For improved performance with APCu caching fallback"
     }
 }
