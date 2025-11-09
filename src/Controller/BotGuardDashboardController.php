@@ -317,11 +317,17 @@ class BotGuardDashboardController extends ControllerBase {
 
       foreach ($slice as $entry) {
         $entry_time = isset($entry['time']) ? $entry['time'] : (isset($entry['ts']) ? $entry['ts'] : time());
+        $reason = $entry['reason'] ?? 'unknown';
+        
+        // Build context-specific details column
+        $details = $this->buildDetailsColumn($entry, $reason);
+        
         $hist_rows[] = [
           date('Y-m-d H:i:s', $entry_time),
           $entry['ip'] ?? '-',
           $entry['path'] ?? '-',
-          $this->formatReason($entry['reason'] ?? 'unknown'),
+          ['data' => ['#markup' => $details]],
+          $this->formatReason($reason),
         ];
       }
 
@@ -333,9 +339,10 @@ class BotGuardDashboardController extends ControllerBase {
           '#type' => 'table',
           '#header' => [
             $this->t('Timestamp'),
-            $this->t('IP'),
+            $this->t('IP Address'),
             $this->t('Path'),
-            $this->t('Reason'),
+            $this->t('Details'),
+            $this->t('Block Reason'),
           ],
           '#rows' => $hist_rows,
           '#attributes' => ['class' => ['bot-guard-history']],
@@ -361,6 +368,7 @@ class BotGuardDashboardController extends ControllerBase {
       'ua-block',
       'ua-short',
       'no-accept-language',
+      'suspicious-resolution',
       'facet-limit',
       'facet-flood-ban',
       'ratelimit',
@@ -443,6 +451,55 @@ class BotGuardDashboardController extends ControllerBase {
   }
 
   /**
+   * Build context-specific details column for history table.
+   *
+   * @param array $entry
+   *   The history entry.
+   * @param string $reason
+   *   The block reason.
+   *
+   * @return string
+   *   HTML markup for details column.
+   */
+  protected function buildDetailsColumn(array $entry, string $reason): string {
+    $ua = $entry['ua'] ?? '-';
+    $ua_short = mb_strlen($ua) > 50 ? mb_substr($ua, 0, 47) . '...' : $ua;
+    
+    switch ($reason) {
+      case 'suspicious-resolution':
+        // Show screen resolution + UA
+        $resolution = $entry['screen_resolution'] ?? 'unknown';
+        return '<strong>Resolution:</strong> ' . htmlspecialchars($resolution, ENT_QUOTES) . '<br>' .
+               '<span style="font-size:0.9em" title="' . htmlspecialchars($ua, ENT_QUOTES) . '">' . 
+               htmlspecialchars($ua_short, ENT_QUOTES) . '</span>';
+        
+      case 'ua-block':
+      case 'ua-short':
+        // Show full UA (most important for these reasons)
+        return '<span title="' . htmlspecialchars($ua, ENT_QUOTES) . '">' . 
+               htmlspecialchars($ua_short, ENT_QUOTES) . '</span>';
+        
+      case 'facet-limit':
+      case 'facet-flood-ban':
+        // Show facet params if available
+        if (!empty($entry['facet_params'])) {
+          $params = is_array($entry['facet_params']) ? implode(', ', $entry['facet_params']) : $entry['facet_params'];
+          $params_short = mb_strlen($params) > 50 ? mb_substr($params, 0, 47) . '...' : $params;
+          return '<strong>Facets:</strong> ' . htmlspecialchars($params_short, ENT_QUOTES) . '<br>' .
+                 '<span style="font-size:0.9em" title="' . htmlspecialchars($ua, ENT_QUOTES) . '">' . 
+                 htmlspecialchars($ua_short, ENT_QUOTES) . '</span>';
+        }
+        return '<span title="' . htmlspecialchars($ua, ENT_QUOTES) . '">' . 
+               htmlspecialchars($ua_short, ENT_QUOTES) . '</span>';
+        
+      default:
+        // Default: show UA
+        return '<span title="' . htmlspecialchars($ua, ENT_QUOTES) . '">' . 
+               htmlspecialchars($ua_short, ENT_QUOTES) . '</span>';
+    }
+  }
+
+  /**
    * Format a block reason for display.
    *
    * @param string $reason
@@ -457,6 +514,7 @@ class BotGuardDashboardController extends ControllerBase {
       'ua-block' => $this->t('User Agent Blocked'),
       'ua-short' => $this->t('User Agent Too Short'),
       'no-accept-language' => $this->t('Missing Accept-Language Header'),
+      'suspicious-resolution' => $this->t('Suspicious Screen Resolution'),
       'facet-limit' => $this->t('Facet Parameter Limit Exceeded'),
       'facet-flood-ban' => $this->t('Facet Flood Pattern Detected'),
       'ratelimit' => $this->t('Rate Limit Exceeded'),

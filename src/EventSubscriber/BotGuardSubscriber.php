@@ -264,7 +264,9 @@ class BotGuardSubscriber implements EventSubscriberInterface {
     if ($hasValidChallengeCookie && $resolutionCheckEnabled && !empty($this->screenResolution)) {
       if ($this->isSuspiciousScreenResolution($ua, $this->screenResolution)) {
         $this->storeDecision($cacheEnabled, $cacheKey, self::BLOCK, $cacheTtl);
-        $this->deny($event, $config, $ip, $ua, $path, 'suspicious-resolution');
+        $this->deny($event, $config, $ip, $ua, $path, 'suspicious-resolution', [
+          'screen_resolution' => $this->screenResolution,
+        ]);
         return;
       }
     }
@@ -436,9 +438,11 @@ class BotGuardSubscriber implements EventSubscriberInterface {
    *   The request path.
    * @param string $reason
    *   The reason for blocking the request.
+   * @param array $details
+   *   Optional additional details for logging.
    */
-  private function deny(RequestEvent $event, $config, string $ip, string $ua, string $path, string $reason): void {
-    $this->log($ip, $ua, $path, $reason);
+  private function deny(RequestEvent $event, $config, string $ip, string $ua, string $path, string $reason, array $details = []): void {
+    $this->log($ip, $ua, $path, $reason, $details);
 
     // Use centralized error response configuration.
     $statusCode = (int) ($config->get('block_status_code') ?? 404);
@@ -465,9 +469,11 @@ class BotGuardSubscriber implements EventSubscriberInterface {
    *   The request path.
    * @param string $reason
    *   The reason for blocking the request.
+   * @param array $details
+   *   Optional additional details for logging.
    */
-  private function deny429(RequestEvent $event, $config, string $ip, string $ua, string $path, string $reason): void {
-    $this->log($ip, $ua, $path, $reason);
+  private function deny429(RequestEvent $event, $config, string $ip, string $ua, string $path, string $reason, array $details = []): void {
+    $this->log($ip, $ua, $path, $reason, $details);
 
     // Use centralized rate limit error response configuration.
     $statusCode = (int) ($config->get('ratelimit_status_code') ?? 429);
@@ -492,8 +498,10 @@ class BotGuardSubscriber implements EventSubscriberInterface {
    *   The request path.
    * @param string $reason
    *   The reason for blocking the request.
+   * @param array $details
+   *   Optional additional details (e.g., screen resolution, facet params).
    */
-  private function log(string $ip, string $ua, string $path, string $reason): void {
+  private function log(string $ip, string $ua, string $path, string $reason, array $details = []): void {
     if (!$this->isCacheAvailable()) {
       return;
     }
@@ -512,24 +520,24 @@ class BotGuardSubscriber implements EventSubscriberInterface {
       $this->cacheBackend->set($reasonKey, $reasonCount + 1);
 
       // Track last block
-      $this->cacheBackend->set('bg.blocked.last', [
+      $this->cacheBackend->set('bg.blocked.last', array_merge([
         'time' => $this->time->getRequestTime(),
         'ip' => $ip,
         'ua' => $ua,
         'path' => $path,
         'reason' => $reason,
-      ]);
+      ], $details));
 
       // Keep small rolling history (last 20 blocks)
       $hist_cache = $this->cacheBackend->get('bg.history');
       $hist = $hist_cache ? $hist_cache->data : [];
-      array_unshift($hist, [
+      array_unshift($hist, array_merge([
         'time' => $this->time->getRequestTime(),
         'ip' => $ip,
         'path' => $path,
         'ua' => $ua,
         'reason' => $reason,
-      ]);
+      ], $details));
       $hist = array_slice($hist, 0, 20);
       $this->cacheBackend->set('bg.history', $hist);
     }
@@ -542,22 +550,22 @@ class BotGuardSubscriber implements EventSubscriberInterface {
       $reasonCount = apcu_fetch($reasonKey);
       apcu_store($reasonKey, ($reasonCount === FALSE ? 1 : ((int) $reasonCount) + 1), 0);
 
-      apcu_store('bg.blocked.last', [
+      apcu_store('bg.blocked.last', array_merge([
         'time' => time(),
         'ip' => $ip,
         'ua' => $ua,
         'path' => $path,
         'reason' => $reason,
-      ]);
+      ], $details));
 
       $hist = apcu_fetch('bg.history') ?: [];
-      array_unshift($hist, [
+      array_unshift($hist, array_merge([
         'time' => time(),
         'ip' => $ip,
         'path' => $path,
         'ua' => $ua,
         'reason' => $reason,
-      ]);
+      ], $details));
       $hist = array_slice($hist, 0, 20);
       apcu_store('bg.history', $hist);
     }
