@@ -125,10 +125,38 @@ All features are configurable at **Administration > Configuration > System > Bot
 
 View real-time statistics at **Administration > Reports > Bot Guard** (`/admin/reports/bot-guard`). The dashboard provides:
 
+- **Block Token Decoder:** Troubleshoot false positives by decoding reference tokens from error pages
 - **Overall Statistics:** Total requests, blocks, allows, challenge success rate
 - **Block Types Breakdown:** Detailed breakdown by reason (UA blocks, rate limits, failed challenges, etc.)
 - **Last Blocked Request:** Details of the most recent block
 - **Recent Block Events:** History of the last 20 blocked requests with context-specific details
+
+### Troubleshooting False Positives
+
+When a user is blocked, they receive an error page with a **reference token** like:
+
+```
+Access Denied
+Your request was blocked.
+
+Reference: BG1a2bC3d4E5f6g7H8i9J0k1L2m3N4o5P6q7R8s9T0
+```
+
+To troubleshoot:
+
+1. Copy the reference token from the error page
+2. Go to the Bot Guard Dashboard
+3. Paste the token into the "Block Token Decoder" section
+4. Click "Decode" to see full details:
+   - Block reason
+   - IP address
+   - User-Agent
+   - Path
+   - Screen resolution (if available)
+   - Cookie information (if available)
+   - Timestamp
+
+This allows you to quickly identify why a legitimate user was blocked and adjust the configuration accordingly.
 
 ### Block Reasons
 
@@ -194,10 +222,15 @@ Always add to UA allow-list:
 ### Troubleshooting
 
 **Legitimate Users Being Blocked:**
-1. Check dashboard for block reason
-2. Add their IP to allow-list temporarily
-3. Adjust configuration (lower PoW difficulty, disable resolution check, etc.)
-4. Check if they're using an outdated browser (for PoW)
+1. Ask the user to send you a screenshot of the error page (including the Reference token)
+2. Copy the reference token and paste it into the **Block Token Decoder** on the dashboard
+3. Review the decoded information to understand why they were blocked:
+   - **UA Block:** Add exception to allow-list or adjust block patterns
+   - **Challenge Failed:** Check if PoW difficulty is too high, or if they have JavaScript disabled
+   - **Suspicious Resolution:** May be a false positive (e.g., iPad Safari), consider disabling check
+   - **Rate Limit:** May be legitimate high-traffic user, add IP to allow-list
+4. Add their IP to allow-list temporarily while investigating
+5. Adjust configuration based on findings
 
 **High "Challenge Failed" Count:**
 - May indicate bot attacks (good!)

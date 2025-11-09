@@ -244,18 +244,18 @@ class BotGuardSubscriber implements EventSubscriberInterface {
       if (!$this->hasValidChallengeCookie($cookieValue, $ip, $ua)) {
         // Determine if this is a failed challenge attempt or first visit
         $isChallengeFailure = !empty($cookieValue);
-        
+
         // For GET/HEAD requests, serve the JS challenge to the browser.
         if (in_array($method, ['GET', 'HEAD'], TRUE)) {
           $this->storeDecision($cacheEnabled, $cacheKey, self::CHALLENGE_PENDING, $cacheTtl);
-          
+
           // Log failed challenge attempts (invalid/expired cookie)
           if ($isChallengeFailure) {
             $this->log($ip, $ua, $path, 'challenge-failed', [
               'cookie_present' => TRUE,
             ]);
           }
-          
+
           $this->serveChallenge($event, $cookieName, $cookieTtl, $ip, $ua);
         }
         // For other methods like POST, block if no valid cookie is present.
@@ -436,7 +436,7 @@ class BotGuardSubscriber implements EventSubscriberInterface {
   }
 
   /**
-   * Deny a request with a standard block response.
+   * Deny a request with a custom error response.
    *
    * @param \Symfony\Component\HttpKernel\Event\RequestEvent $event
    *   The request event.
@@ -456,14 +456,10 @@ class BotGuardSubscriber implements EventSubscriberInterface {
   private function deny(RequestEvent $event, $config, string $ip, string $ua, string $path, string $reason, array $details = []): void {
     $this->log($ip, $ua, $path, $reason, $details);
 
-    // Use centralized error response configuration.
     $statusCode = (int) ($config->get('block_status_code') ?? 404);
     $message = (string) ($config->get('block_message') ?? '<h1>Access Denied</h1><p>Your request was blocked.</p>');
 
-    $event->setResponse(new Response($message, $statusCode, [
-      'Content-Type' => 'text/html; charset=utf-8',
-    ]));
-    $event->stopPropagation();
+    $this->buildDenyResponse($event, $ip, $ua, $path, $reason, $details, $statusCode, $message);
   }
 
   /**
@@ -487,15 +483,64 @@ class BotGuardSubscriber implements EventSubscriberInterface {
   private function deny429(RequestEvent $event, $config, string $ip, string $ua, string $path, string $reason, array $details = []): void {
     $this->log($ip, $ua, $path, $reason, $details);
 
-    // Use centralized rate limit error response configuration.
     $statusCode = (int) ($config->get('ratelimit_status_code') ?? 429);
     $message = (string) ($config->get('ratelimit_message') ?? '<h1>Too Many Requests</h1><p>Please slow down.</p>');
     $retryAfter = (int) ($config->get('ratelimit_retry_after') ?? 30);
 
-    $event->setResponse(new Response($message, $statusCode, [
-      'Content-Type' => 'text/html; charset=utf-8',
-      'Retry-After' => (string) $retryAfter,
-    ]));
+    $this->buildDenyResponse($event, $ip, $ua, $path, $reason, $details, $statusCode, $message, $retryAfter);
+  }
+
+  /**
+   * Build and set a deny response with token injection.
+   *
+   * @param \Symfony\Component\HttpKernel\Event\RequestEvent $event
+   *   The request event.
+   * @param string $ip
+   *   The client IP address.
+   * @param string $ua
+   *   The client User-Agent string.
+   * @param string $path
+   *   The request path.
+   * @param string $reason
+   *   The reason for blocking the request.
+   * @param array $details
+   *   Optional additional details for logging.
+   * @param int $statusCode
+   *   The HTTP status code.
+   * @param string $message
+   *   The response message.
+   * @param int|null $retryAfter
+   *   Optional Retry-After header value in seconds.
+   */
+  private function buildDenyResponse(
+    RequestEvent $event,
+    string $ip,
+    string $ua,
+    string $path,
+    string $reason,
+    array $details,
+    int $statusCode,
+    string $message,
+    ?int $retryAfter = NULL
+  ): void {
+    // Generate debug token for troubleshooting.
+    $token = $this->generateBlockToken($ip, $ua, $path, $reason, $details);
+
+    // Add token to message if not already present.
+    if (!str_contains($message, '{token}')) {
+      $message .= '<strong>Reference:</strong> ' . htmlspecialchars($token);
+    }
+    else {
+      // Replace placeholder if present in custom message.
+      $message = str_replace('{token}', htmlspecialchars($token), $message);
+    }
+
+    $headers = ['Content-Type' => 'text/html; charset=utf-8'];
+    if ($retryAfter !== NULL) {
+      $headers['Retry-After'] = (string) $retryAfter;
+    }
+
+    $event->setResponse(new Response($message, $statusCode, $headers));
     $event->stopPropagation();
   }
 
@@ -646,7 +691,7 @@ class BotGuardSubscriber implements EventSubscriberInterface {
     if ($powEnabled) {
       // Generate proof-of-work challenge
       $powChallenge = $this->generatePowChallenge($ip, $ua, $exp);
-      
+
       // Serve challenge page with proof-of-work
       $html = $this->buildPowChallengePage(
         $cookieName,
@@ -956,8 +1001,10 @@ class BotGuardSubscriber implements EventSubscriberInterface {
    * browsers, while being permissive enough to allow legitimate devices.
    *
    * Known limitations:
-   * - iPads with Safari report as "Macintosh" (desktop UA) with tablet resolutions
-   * - Modern tablets can have various resolutions overlapping with small laptops
+   * - iPads with Safari report as "Macintosh" (desktop UA) with tablet
+   * resolutions
+   * - Modern tablets can have various resolutions overlapping with small
+   * laptops
    *
    * @param string $ua
    *   The client User-Agent string.
@@ -1060,6 +1107,101 @@ class BotGuardSubscriber implements EventSubscriberInterface {
   }
 
   /**
+   * Generate an encoded block token for debugging.
+   *
+   * Creates a compact token containing block information that can be decoded
+   * in the dashboard for troubleshooting false positives.
+   *
+   * Format: BG + CRC32(3 chars) + base64url(gzcompress(json({...})))
+   * Uses gzip compression and URL-safe base64 to minimize token length.
+   * The token is not cryptographically signed - it's just for debugging.
+   * Contains full IP address and User-Agent for admin troubleshooting.
+   *
+   * @param string $ip
+   *   The client IP address.
+   * @param string $ua
+   *   The client User-Agent string.
+   * @param string $path
+   *   The request path.
+   * @param string $reason
+   *   The block reason.
+   * @param array $details
+   *   Additional details (resolution, cookie info, etc.).
+   *
+   * @return string
+   *   The encoded block token (typically 40-60% smaller than uncompressed).
+   */
+  private function generateBlockToken(string $ip, string $ua, string $path, string $reason, array $details): string {
+    // Pack data efficiently: reason|ip|ua|path|timestamp|details
+    // Use pipe separator for easy parsing
+    $detailsJson = empty($details) ? '' : json_encode($details, JSON_UNESCAPED_SLASHES);
+    $data = implode('|', [$reason, $ip, $ua, $path, time(), $detailsJson]);
+
+    // Compress with gzcompress (level 9 = maximum compression)
+    $compressed = gzcompress($data, 9);
+
+    // Base64 encode (URL-safe variant, no padding)
+    $token = rtrim(strtr(base64_encode($compressed), '+/', '-_'), '=');
+
+    // Add prefix (no checksum to save 3 chars)
+    return 'BG' . $token;
+  }
+
+  /**
+   * Decode a block token for debugging.
+   *
+   * @param string $token
+   *   The encoded block token.
+   *
+   * @return array|null
+   *   The decoded token data, or NULL if invalid.
+   */
+  public static function decodeBlockToken(string $token): ?array {
+    // Remove prefix (BG)
+    if (!str_starts_with($token, 'BG') || strlen($token) < 4) {
+      return NULL;
+    }
+
+    $encodedData = substr($token, 2);
+
+    // Restore padding if needed
+    $padding = strlen($encodedData) % 4;
+    if ($padding > 0) {
+      $encodedData .= str_repeat('=', 4 - $padding);
+    }
+
+    // Convert URL-safe base64 back to standard base64
+    $encodedData = strtr($encodedData, '-_', '+/');
+
+    // Base64 decode
+    $compressed = base64_decode($encodedData, TRUE);
+    if ($compressed === FALSE) {
+      return NULL;
+    }
+
+    // Decompress
+    $data = @gzuncompress($compressed);
+    if ($data === FALSE) {
+      return NULL;
+    }
+
+    // Parse pipe-separated values: reason|ip|ua|path|timestamp|details
+    $parts = explode('|', $data, 6);
+    if (count($parts) < 5) {
+      return NULL;
+    }
+
+    return [
+      'r' => $parts[0],
+      'i' => $parts[1],
+      'u' => $parts[2],
+      'p' => $parts[3],
+      't' => (int) $parts[4],
+      'd' => isset($parts[5]) && $parts[5] !== '' ? json_decode($parts[5], TRUE) : [],
+    ];
+  }
+
+  /**
    * Build the HTML page for proof-of-work challenge.
    *
    * @param string $cookieName
@@ -1082,13 +1224,13 @@ class BotGuardSubscriber implements EventSubscriberInterface {
    */
   private function buildPowChallengePage(string $cookieName, int $exp, string $sig, string $challenge, int $difficulty, int $maxIterations, int $timeout): string {
     $expMs = $exp * 1000;
-    
+
     // Inline Web Worker code for proof-of-work computation
     $workerCode = <<<'WORKER'
 self.onmessage = async function(e) {
   const { challenge, difficulty, maxIterations } = e.data;
   const target = '0'.repeat(difficulty);
-  
+
   // Use SubtleCrypto for SHA-256 hashing
   async function sha256(str) {
     const encoder = new TextEncoder();
@@ -1097,27 +1239,27 @@ self.onmessage = async function(e) {
     const hashArray = Array.from(new Uint8Array(hashBuffer));
     return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
   }
-  
+
   let nonce = 0;
   let hash = '';
-  
+
   try {
     while (nonce < maxIterations) {
       hash = await sha256(challenge + nonce);
-      
+
       if (hash.startsWith(target)) {
         self.postMessage({ success: true, nonce, hash });
         return;
       }
-      
+
       nonce++;
-      
+
       // Report progress every 10000 iterations
       if (nonce % 10000 === 0) {
         self.postMessage({ progress: nonce });
       }
     }
-    
+
     self.postMessage({ success: false, error: 'Max iterations reached' });
   } catch (error) {
     self.postMessage({ success: false, error: error.message });
@@ -1126,12 +1268,12 @@ self.onmessage = async function(e) {
 WORKER;
 
     $workerBlob = base64_encode($workerCode);
-    
+
     // Properly escape values for JavaScript
     $challengeJson = json_encode($challenge);
     $sigJson = json_encode($sig);
     $cookieNameJson = json_encode($cookieName);
-    
+
     $html = '<!doctype html><html><head><meta charset="utf-8">' .
       '<meta name="viewport" content="width=device-width, initial-scale=1">' .
       '<title>Verifying Your Browser…</title><style>' .

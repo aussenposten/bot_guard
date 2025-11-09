@@ -7,6 +7,7 @@ use Drupal\Component\Datetime\TimeInterface;
 use Drupal\Core\Cache\CacheBackendInterface;
 use Drupal\Core\Config\ConfigFactoryInterface;
 use Drupal\Core\Controller\ControllerBase;
+use Drupal\Core\Form\FormBuilderInterface;
 use Symfony\Component\DependencyInjection\ContainerInterface;
 
 /**
@@ -43,6 +44,13 @@ class BotGuardDashboardController extends ControllerBase {
   protected $metricsService;
 
   /**
+   * The form builder service.
+   *
+   * @var \Drupal\Core\Form\FormBuilderInterface
+   */
+  protected $formBuilder;
+
+  /**
    * Constructs a BotGuardDashboardController object.
    *
    * @param \Drupal\Core\Cache\CacheBackendInterface $cache
@@ -53,17 +61,21 @@ class BotGuardDashboardController extends ControllerBase {
    *   The config factory service.
    * @param \Drupal\bot_guard\Service\BotGuardMetricsService $metricsService
    *   The metrics service.
+   * @param \Drupal\Core\Form\FormBuilderInterface $formBuilder
+   *   The form builder service.
    */
   public function __construct(
     CacheBackendInterface $cache,
     TimeInterface $time,
     ConfigFactoryInterface $configFactory,
-    BotGuardMetricsService $metricsService
+    BotGuardMetricsService $metricsService,
+    FormBuilderInterface $formBuilder
   ) {
     $this->cache = $cache;
     $this->time = $time;
     $this->configFactory = $configFactory;
     $this->metricsService = $metricsService;
+    $this->formBuilder = $formBuilder;
   }
 
   /**
@@ -75,6 +87,7 @@ class BotGuardDashboardController extends ControllerBase {
       $container->get('datetime.time'),
       $container->get('config.factory'),
       $container->get('bot_guard.metrics'),
+      $container->get('form_builder')
     );
   }
 
@@ -89,6 +102,14 @@ class BotGuardDashboardController extends ControllerBase {
    */
   public function dashboard(): array {
     $config = $this->configFactory->get('bot_guard.settings');
+
+    // Check for token decoder request
+    $request = \Drupal::request();
+    $token = $request->query->get('token');
+    $decoded_token = NULL;
+    if ($token) {
+      $decoded_token = \Drupal\bot_guard\EventSubscriber\BotGuardSubscriber::decodeBlockToken($token);
+    }
 
     // Initialize metrics early to ensure start time is set.
     $this->metricsService->ensureMetricsInitialized();
@@ -249,6 +270,64 @@ class BotGuardDashboardController extends ControllerBase {
       ];
     }
 
+    // Token decoder section
+    $build['token_decoder'] = [
+      '#type' => 'details',
+      '#title' => $this->t('Block Token Decoder'),
+      '#open' => !empty($decoded_token),
+      '#description' => $this->t('Decode a block reference token from an error page to troubleshoot false positives.'),
+      '#weight' => -50,
+    ];
+
+    // Token input form
+    $build['token_decoder']['form'] = $this->formBuilder->getForm('Drupal\bot_guard\Form\TokenDecoderForm');
+
+    // Display decoded token if available
+    if ($decoded_token) {
+      $token_rows = [
+        [$this->t('Block Reason'), $this->formatReason($decoded_token['r'] ?? 'unknown')],
+        [$this->t('IP Address'), htmlspecialchars($decoded_token['i'] ?? '-')],
+        [$this->t('User Agent'), htmlspecialchars($decoded_token['u'] ?? '-')],
+        [$this->t('Path'), htmlspecialchars($decoded_token['p'] ?? '-')],
+        [$this->t('Timestamp'), isset($decoded_token['t']) ? date('Y-m-d H:i:s', $decoded_token['t']) : '-'],
+        [
+          $this->t('Time Ago'),
+          isset($decoded_token['t']) ? $this->formatTimeAgo($this->time->getRequestTime() - $decoded_token['t']) : '-',
+        ],
+      ];
+
+      // Add details if present
+      if (!empty($decoded_token['d'])) {
+        foreach ($decoded_token['d'] as $key => $value) {
+          $label = ucfirst(str_replace('_', ' ', $key));
+          $formatted_value = is_array($value) ? json_encode($value) : $value;
+          $token_rows[] = [$this->t('Detail: @label', ['@label' => $label]), htmlspecialchars($formatted_value)];
+        }
+      }
+
+      $build['token_decoder']['result'] = [
+        '#type' => 'markup',
+        '#markup' => '<div class="messages messages--status" style="margin-bottom:1rem;">' .
+          '<strong>' . $this->t('✓ Token decoded successfully') . '</strong></div>',
+      ];
+
+      $build['token_decoder']['table'] = [
+        '#type' => 'table',
+        '#header' => [$this->t('Field'), $this->t('Value')],
+        '#rows' => $token_rows,
+        '#attributes' => ['class' => ['bot-guard-token-info']],
+      ];
+    }
+    elseif ($token) {
+      $build['token_decoder']['error'] = [
+        '#type' => 'markup',
+        '#markup' => '<div class="messages messages--error">' .
+          '<strong>' . $this->t('✗ Invalid token') . '</strong> ' .
+          $this->t('The provided token could not be decoded. Please check that you copied it correctly.') .
+          '</div>',
+      ];
+    }
+
     $build['overall'] = [
       '#type' => 'details',
       '#title' => $this->t('Overall Statistics'),
@@ -318,10 +397,10 @@ class BotGuardDashboardController extends ControllerBase {
       foreach ($slice as $entry) {
         $entry_time = isset($entry['time']) ? $entry['time'] : (isset($entry['ts']) ? $entry['ts'] : time());
         $reason = $entry['reason'] ?? 'unknown';
-        
+
         // Build context-specific details column
         $details = $this->buildDetailsColumn($entry, $reason);
-        
+
         $hist_rows[] = [
           date('Y-m-d H:i:s', $entry_time),
           $entry['ip'] ?? '-',
@@ -466,28 +545,28 @@ class BotGuardDashboardController extends ControllerBase {
   protected function buildDetailsColumn(array $entry, string $reason): string {
     $ua = $entry['ua'] ?? '-';
     $ua_short = mb_strlen($ua) > 50 ? mb_substr($ua, 0, 47) . '...' : $ua;
-    
+
     switch ($reason) {
       case 'suspicious-resolution':
         // Show screen resolution + UA
         $resolution = $entry['screen_resolution'] ?? 'unknown';
         return '<strong>Resolution:</strong> ' . htmlspecialchars($resolution, ENT_QUOTES) . '<br>' .
-               '<span style="font-size:0.9em" title="' . htmlspecialchars($ua, ENT_QUOTES) . '">' . 
+               '<span style="font-size:0.9em" title="' . htmlspecialchars($ua, ENT_QUOTES) . '">' .
                htmlspecialchars($ua_short, ENT_QUOTES) . '</span>';
-        
+
       case 'challenge-failed':
         // Show that cookie was present but invalid
         $cookie_present = !empty($entry['cookie_present']) ? 'Yes (invalid/expired)' : 'No';
         return '<strong>Cookie:</strong> ' . htmlspecialchars($cookie_present, ENT_QUOTES) . '<br>' .
-               '<span style="font-size:0.9em" title="' . htmlspecialchars($ua, ENT_QUOTES) . '">' . 
+               '<span style="font-size:0.9em" title="' . htmlspecialchars($ua, ENT_QUOTES) . '">' .
                htmlspecialchars($ua_short, ENT_QUOTES) . '</span>';
-        
+
       case 'ua-block':
       case 'ua-short':
         // Show full UA (most important for these reasons)
-        return '<span title="' . htmlspecialchars($ua, ENT_QUOTES) . '">' . 
+        return '<span title="' . htmlspecialchars($ua, ENT_QUOTES) . '">' .
                htmlspecialchars($ua_short, ENT_QUOTES) . '</span>';
-        
+
       case 'facet-limit':
       case 'facet-flood-ban':
         // Show facet params if available
@@ -495,15 +574,15 @@ class BotGuardDashboardController extends ControllerBase {
           $params = is_array($entry['facet_params']) ? implode(', ', $entry['facet_params']) : $entry['facet_params'];
           $params_short = mb_strlen($params) > 50 ? mb_substr($params, 0, 47) . '...' : $params;
           return '<strong>Facets:</strong> ' . htmlspecialchars($params_short, ENT_QUOTES) . '<br>' .
-                 '<span style="font-size:0.9em" title="' . htmlspecialchars($ua, ENT_QUOTES) . '">' . 
+                 '<span style="font-size:0.9em" title="' . htmlspecialchars($ua, ENT_QUOTES) . '">' .
                  htmlspecialchars($ua_short, ENT_QUOTES) . '</span>';
         }
-        return '<span title="' . htmlspecialchars($ua, ENT_QUOTES) . '">' . 
+        return '<span title="' . htmlspecialchars($ua, ENT_QUOTES) . '">' .
                htmlspecialchars($ua_short, ENT_QUOTES) . '</span>';
-        
+
       default:
         // Default: show UA
-        return '<span title="' . htmlspecialchars($ua, ENT_QUOTES) . '">' . 
+        return '<span title="' . htmlspecialchars($ua, ENT_QUOTES) . '">' .
                htmlspecialchars($ua_short, ENT_QUOTES) . '</span>';
     }
   }
