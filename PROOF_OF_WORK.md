@@ -241,6 +241,6 @@ Potential improvements for future versions:
 ## References
 
 - [Hashcash](http://www.hashcash.org/) - Original PoW concept for spam prevention
-- [Anubis](https://github.com/Xe/x/tree/master/cmd/anubis) - Inspiration for this implementation
+- [Anubis](https://github.com/TecharoHQ/anubis) - Inspiration for this implementation
 - [SubtleCrypto API](https://developer.mozilla.org/en-US/docs/Web/API/SubtleCrypto) - Browser crypto API
 - [Web Workers](https://developer.mozilla.org/en-US/docs/Web/API/Web_Workers_API) - Background computation

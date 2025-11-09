@@ -13,6 +13,8 @@ allow_bots: |
   Bingbot
   DuckDuckBot
   Applebot
+  Kagibot
+  Qwantbot
   UptimeRobot
   Uptime-Kuma
 block_bots: |

@@ -130,6 +130,7 @@ class BotGuardDashboardController extends ControllerBase {
       $start_cache = $this->cache->get('bg.metrics.start');
       $last_cache = $this->cache->get('bg.blocked.last');
       $history_cache = $this->cache->get('bg.history');
+      $ua_stats_cache = $this->cache->get('bg.ua.stats');
 
       $blocked = $blocked_cache ? $blocked_cache->data : 0;
       $allowed = $allowed_cache ? $allowed_cache->data : 0;
@@ -137,6 +138,7 @@ class BotGuardDashboardController extends ControllerBase {
       $start = $start_cache ? $start_cache->data : $this->time->getRequestTime();
       $last = $last_cache ? $last_cache->data : [];
       $history = $history_cache ? $history_cache->data : [];
+      $ua_stats = $ua_stats_cache ? $ua_stats_cache->data : [];
 
       // Collect reason breakdown
       $reasons = $this->collectReasonBreakdownFromCache();
@@ -149,6 +151,7 @@ class BotGuardDashboardController extends ControllerBase {
       $start = (int) apcu_fetch('bg.metrics.start') ?: $this->time->getRequestTime();
       $last = apcu_fetch('bg.blocked.last') ?: [];
       $history = apcu_fetch('bg.history') ?: [];
+      $ua_stats = apcu_fetch('bg.ua.stats') ?: [];
 
       // Collect reason breakdown from APCu
       $reasons = $this->collectReasonBreakdownFromApcu();
@@ -161,6 +164,7 @@ class BotGuardDashboardController extends ControllerBase {
       $start = $this->time->getRequestTime();
       $last = [];
       $history = [];
+      $ua_stats = [];
       $reasons = [];
     }
 
@@ -385,6 +389,52 @@ class BotGuardDashboardController extends ControllerBase {
           '#header' => [$this->t('Field'), $this->t('Value')],
           '#rows' => $last_blocked_rows,
           '#attributes' => ['class' => ['bot-guard-last-blocked']],
+        ],
+      ];
+    }
+
+    // Blocked User Agents (UA-specific blocks only).
+    if (!empty($ua_stats)) {
+      // Sort by count descending
+      uasort($ua_stats, function ($a, $b) {
+        return $b['count'] <=> $a['count'];
+      });
+
+      $ua_rows = [];
+      foreach ($ua_stats as $data) {
+        $ua_display = !empty($data['ua']) ? $data['ua'] : $this->t('(empty)');
+        $ua_short = mb_strlen($ua_display) > 80 ? mb_substr($ua_display, 0, 77) . '...' : $ua_display;
+
+        // Build reasons breakdown
+        $reasons_list = [];
+        foreach ($data['reasons'] as $reason => $count) {
+          $reasons_list[] = $this->formatReason($reason) . ' (' . $count . ')';
+        }
+        $reasons_display = implode('<br>', $reasons_list);
+
+        $ua_rows[] = [
+          ['data' => ['#markup' => '<span title="' . htmlspecialchars($ua_display, ENT_QUOTES) . '">' . htmlspecialchars($ua_short, ENT_QUOTES) . '</span>']],
+          $data['count'],
+          ['data' => ['#markup' => $reasons_display]],
+          date('Y-m-d H:i:s', $data['last_seen']),
+        ];
+      }
+
+      $build['blocked_user_agents'] = [
+        '#type' => 'details',
+        '#title' => $this->t('Blocked User Agents (UA-specific)'),
+        '#open' => TRUE,
+        '#description' => $this->t('User Agents that were blocked due to User Agent patterns (ua-block, ua-short).'),
+        'table' => [
+          '#type' => 'table',
+          '#header' => [
+            $this->t('User Agent'),
+            $this->t('Block Count'),
+            $this->t('Block Reasons'),
+            $this->t('Last Seen'),
+          ],
+          '#rows' => $ua_rows,
+          '#attributes' => ['class' => ['bot-guard-blocked-user-agents']],
         ],
       ];
     }

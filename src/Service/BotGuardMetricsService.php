@@ -74,6 +74,7 @@ class BotGuardMetricsService {
         $this->cacheBackend->set('bg.blocked.count', 0);
         $this->cacheBackend->set('bg.allowed.count', 0);
         $this->cacheBackend->set('bg.challenge.count', 0);
+        $this->cacheBackend->set('bg.ua.stats', []);
       }
     }
     elseif (function_exists('apcu_store') && !apcu_exists('bg.metrics.start')) {
@@ -89,6 +90,9 @@ class BotGuardMetricsService {
       }
       if (!apcu_exists('bg.challenge.count')) {
         apcu_store('bg.challenge.count', 0, 0);
+      }
+      if (!apcu_exists('bg.ua.stats')) {
+        apcu_store('bg.ua.stats', [], 0);
       }
     }
   }

@@ -515,6 +515,31 @@ class BotGuardSubscriber implements EventSubscriberInterface {
         'reason' => $reason,
       ], $details));
 
+      // Track UA-specific blocks separately for aggregation
+      if (in_array($reason, ['ua-block', 'ua-short'], TRUE)) {
+        $ua_stats_cache = $this->cacheBackend->get('bg.ua.stats');
+        $ua_stats = $ua_stats_cache ? $ua_stats_cache->data : [];
+
+        $ua_key = md5($ua); // Use hash as key to avoid issues with special chars
+        if (!isset($ua_stats[$ua_key])) {
+          $ua_stats[$ua_key] = [
+            'ua' => $ua,
+            'count' => 0,
+            'reasons' => [],
+            'last_seen' => $this->time->getRequestTime(),
+          ];
+        }
+
+        $ua_stats[$ua_key]['count']++;
+        if (!isset($ua_stats[$ua_key]['reasons'][$reason])) {
+          $ua_stats[$ua_key]['reasons'][$reason] = 0;
+        }
+        $ua_stats[$ua_key]['reasons'][$reason]++;
+        $ua_stats[$ua_key]['last_seen'] = $this->time->getRequestTime();
+
+        $this->cacheBackend->set('bg.ua.stats', $ua_stats);
+      }
+
       // Keep small rolling history (last 20 blocks)
       $hist_cache = $this->cacheBackend->get('bg.history');
       $hist = $hist_cache ? $hist_cache->data : [];
@@ -544,6 +569,30 @@ class BotGuardSubscriber implements EventSubscriberInterface {
         'path' => $path,
         'reason' => $reason,
       ], $details));
+
+      // Track UA-specific blocks separately for aggregation
+      if (in_array($reason, ['ua-block', 'ua-short'], TRUE)) {
+        $ua_stats = apcu_fetch('bg.ua.stats') ?: [];
+
+        $ua_key = md5($ua); // Use hash as key to avoid issues with special chars
+        if (!isset($ua_stats[$ua_key])) {
+          $ua_stats[$ua_key] = [
+            'ua' => $ua,
+            'count' => 0,
+            'reasons' => [],
+            'last_seen' => time(),
+          ];
+        }
+
+        $ua_stats[$ua_key]['count']++;
+        if (!isset($ua_stats[$ua_key]['reasons'][$reason])) {
+          $ua_stats[$ua_key]['reasons'][$reason] = 0;
+        }
+        $ua_stats[$ua_key]['reasons'][$reason]++;
+        $ua_stats[$ua_key]['last_seen'] = time();
+
+        apcu_store('bg.ua.stats', $ua_stats, 0);
+      }
 
       $hist = apcu_fetch('bg.history') ?: [];
       array_unshift($hist, array_merge([
