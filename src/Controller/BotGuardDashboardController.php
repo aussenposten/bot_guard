@@ -93,6 +93,9 @@ class BotGuardDashboardController extends ControllerBase {
     // Initialize metrics early to ensure start time is set.
     $this->metricsService->ensureMetricsInitialized();
 
+    // Check if Bot Guard is enabled.
+    $bot_guard_enabled = (bool) $config->get('enabled');
+
     // Check cache availability
     $cache_backend = $this->getCacheBackendName();
     $use_persistent = $this->usePersistentCache();
@@ -145,18 +148,36 @@ class BotGuardDashboardController extends ControllerBase {
     $time_since_str = $this->formatDuration($time_since);
 
     // Calculate statistics.
-    $total_requests = $blocked + $allowed;
-    $percent_blocked = $total_requests > 0 ? sprintf("%.2f%%", ($blocked / $total_requests) * 100) : '0%';
-    $percent_allowed = $total_requests > 0 ? sprintf("%.2f%%", ($allowed / $total_requests) * 100) : '0%';
+    $checked_requests = $blocked + $allowed;
+    $percent_blocked = $checked_requests > 0 ? sprintf("%.2f%%", ($blocked / $checked_requests) * 100) : '0%';
+    $percent_allowed = $checked_requests > 0 ? sprintf("%.2f%%", ($allowed / $checked_requests) * 100) : '0%';
 
     // Requests per hour.
     $hours = max(1, $time_since / 3600);
-    $requests_per_hour = round($total_requests / $hours, 1);
+    $requests_per_hour = round($checked_requests / $hours, 1);
     $blocked_per_hour = round($blocked / $hours, 1);
 
     // Overall statistics table.
+    $status_markup = $bot_guard_enabled
+      ? [
+        '#type' => 'html_tag',
+        '#tag' => 'strong',
+        '#value' => '✓ ' . $this->t('Enabled'),
+        '#attributes' => ['style' => 'color: green;'],
+      ]
+      : [
+        '#type' => 'html_tag',
+        '#tag' => 'strong',
+        '#value' => '✗ ' . $this->t('Disabled'),
+        '#attributes' => ['style' => 'color: red;'],
+      ];
+
     $overall_rows = [
-      [$this->t('Total Requests'), $total_requests],
+      [
+        $this->t('Bot Guard Status'),
+        ['data' => $status_markup],
+      ],
+      [$this->t('Checked Requests'), $checked_requests],
       [$this->t('Blocked Requests'), $blocked],
       [$this->t('Allowed Requests'), $allowed],
       [$this->t('Cookie Challenges Served'), $challenge_count],
@@ -197,6 +218,21 @@ class BotGuardDashboardController extends ControllerBase {
         '#markup' => '<h1>' . $this->t('Bot Guard Dashboard') . '</h1>',
       ],
     ];
+
+    // Critical warning if Bot Guard is disabled.
+    if (!$bot_guard_enabled) {
+      $build['disabled_warning'] = [
+        '#type' => 'markup',
+        '#markup' => '<div class="messages messages--error">' .
+          '<h3>⚠ ' . $this->t('Bot Guard is Currently Disabled') . '</h3>' .
+          '<p>' . $this->t('Bot protection is <strong>not active</strong>. All requests are being allowed through without any bot checks.') . '</p>' .
+          '<p>' . $this->t('To enable bot protection, go to the <a href="@url">Bot Guard configuration page</a> and enable the module.', [
+            '@url' => '/admin/config/system/bot-guard',
+          ]) . '</p>' .
+          '</div>',
+        '#weight' => -100,
+      ];
+    }
 
     // Warning if no cache is available.
     if ($cache_backend === 'None - Metrics disabled') {
