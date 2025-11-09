@@ -40,12 +40,19 @@ This document describes the Anubis-style proof-of-work (PoW) challenge implement
 All settings are configurable via the Bot Guard admin UI at `/admin/config/system/bot-guard`:
 
 - **Enable proof-of-work challenge**: Toggle PoW on/off
-- **Difficulty (leading zeros)**: Number of leading zeros required (3-8)
-  - 3-4: Very fast (< 1 second)
-  - 5-6: Moderate (1-10 seconds) - **Default: 5**
-  - 7-8: Slow (10+ seconds)
+- **Difficulty (leading zeros)**: Number of leading zeros required (3-5)
+  - **3**: Very fast (~0.1-0.5s, ~4K attempts) - **Default: 3** - recommended for most sites
+  - **4**: Fast (~1-3s, ~65K attempts) - balanced security/UX
+  - **5**: Slow (~10-30s, ~1M attempts) - maximum protection, impacts UX
+  - **6+**: Not recommended (>30s, often triggers timeout)
 - **Maximum iterations**: Safety limit to prevent infinite loops (default: 10,000,000)
-- **Client timeout**: Maximum time allowed for solving (default: 30 seconds)
+- **Client timeout**: Maximum time allowed for solving (default: 60 seconds)
+
+**Performance Note**: Difficulty scales exponentially with factor ~16x per level because SHA-256 produces hexadecimal output (16 possible values per character: 0-F). This means:
+- Difficulty 3 requires ~16³ = 4,096 attempts on average
+- Difficulty 4 requires ~16⁴ = 65,536 attempts on average
+- Difficulty 5 requires ~16⁵ = 1,048,576 attempts on average
+- Difficulty 6 requires ~16⁶ = 16,777,216 attempts on average (often exceeds timeout)
 
 ## Technical Details
 
@@ -131,10 +138,14 @@ Inspired by Hashcash (early 2000s email spam prevention), PoW makes automated sc
 
 ### Client-Side
 
-- **Difficulty 5** (default): ~1-10 seconds on modern hardware
-- **CPU Usage**: High during solving, but runs in Web Worker (non-blocking)
+- **Difficulty 3** (default): ~0.1-0.5 seconds on modern hardware
+- **Difficulty 4**: ~1-3 seconds on modern hardware
+- **Difficulty 5**: ~10-30 seconds on modern hardware (may vary significantly)
+- **CPU Usage**: High during solving, but runs in Web Worker (non-blocking UI)
 - **Memory**: Minimal (~1-2 MB for worker)
 - **Battery**: Negligible for occasional challenges
+
+**Hardware Impact**: Actual solve times depend on CPU performance. Older devices or mobile browsers may take 2-3x longer. The exponential scaling (16x per difficulty level) means small increases in difficulty have dramatic performance impacts.
 
 ### Server-Side
 
@@ -183,7 +194,7 @@ The PoW challenge works alongside other Bot Guard features:
 - Web Worker-based computation
 - Challenge derived from request metadata
 - JWT-like cookie with signature
-- Default difficulty of 5 leading zeros
+- Default difficulty of 3 leading zeros (Bot Guard uses lower default for better UX)
 
 ### Differences
 
@@ -199,9 +210,10 @@ The PoW challenge works alongside other Bot Guard features:
 
 ### Challenge Takes Too Long
 
-- **Reduce difficulty**: Lower from 5 to 4 or 3
-- **Increase timeout**: Give clients more time (default: 30s)
-- **Check client hardware**: Older devices may struggle
+- **Reduce difficulty**: Lower to 3 (recommended default) or even 2 for very slow devices
+- **Increase timeout**: Give clients more time (default: 60s, can increase to 90-120s for difficulty 5)
+- **Check client hardware**: Older devices may struggle with difficulty 4+
+- **Consider disabling PoW**: For sites with many mobile/older device users, rely on other Bot Guard features instead
 
 ### Legitimate Users Blocked
 

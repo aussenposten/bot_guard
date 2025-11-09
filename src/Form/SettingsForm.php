@@ -236,10 +236,10 @@ class SettingsForm extends ConfigFormBase {
     $form['pow_challenge']['pow_difficulty'] = [
       '#type' => 'number',
       '#title' => 'Difficulty (leading zeros)',
-      '#default_value' => $config->get('pow_difficulty') ?? 5,
-      '#min' => 3,
-      '#max' => 8,
-      '#description' => 'Number of leading zeros required in the hash. Default is 5 (similar to Anubis). Higher values increase computation time exponentially. 3-4 = very fast, 5-6 = moderate (1-10s), 7-8 = slow (10s-minutes).',
+      '#default_value' => $config->get('pow_difficulty') ?? 3,
+      '#min' => 2,
+      '#max' => 6,
+      '#description' => 'Number of leading zeros required in the hash. Scales exponentially (16x per level): 3 = ~0.5s (recommended), 4 = ~1-3s, 5 = ~10-30s, 6+ = often exceeds timeout. Default: 3.',
     ];
     $form['pow_challenge']['pow_max_iterations'] = [
       '#type' => 'number',
@@ -251,10 +251,10 @@ class SettingsForm extends ConfigFormBase {
     $form['pow_challenge']['pow_timeout'] = [
       '#type' => 'number',
       '#title' => 'Client timeout (seconds)',
-      '#default_value' => $config->get('pow_timeout') ?? 30,
+      '#default_value' => $config->get('pow_timeout') ?? 60,
       '#min' => 10,
       '#max' => 120,
-      '#description' => 'Maximum time allowed for the client to solve the challenge.',
+      '#description' => 'Maximum time allowed for the client to solve the challenge. Increase to 90-120s if using difficulty 5+.',
     ];
 
     // Decision Cache.

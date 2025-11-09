@@ -91,14 +91,15 @@ All features are configurable at **Administration > Configuration > System > Bot
 
 #### Proof-of-Work Challenge
 - **Enable proof-of-work:** Toggle Anubis-style computational challenge
-- **Difficulty:** Number of leading zeros required in SHA-256 hash (3-8, default: 5)
-  - **3-4:** Very fast (< 1 second) - suitable for high-traffic sites
-  - **5-6:** Moderate (1-10 seconds) - recommended default
-  - **7-8:** Slow (10+ seconds) - maximum protection, may impact UX
+- **Difficulty:** Number of leading zeros required in SHA-256 hash (3-5, default: 3)
+  - **3:** Very fast (~0.1-0.5s, ~4K attempts) - **recommended default**
+  - **4:** Fast (~1-3s, ~65K attempts) - balanced security/UX
+  - **5:** Slow (~10-30s, ~1M attempts) - maximum protection, impacts UX
+  - **6+:** Not recommended (>30s, often triggers timeout)
 - **Maximum iterations:** Safety limit to prevent infinite loops (default: 10M)
-- **Client timeout:** Maximum time allowed for solving (default: 30 seconds)
+- **Client timeout:** Maximum time allowed for solving (default: 60 seconds)
 
-**Note:** The proof-of-work challenge runs in a Web Worker, so it doesn't block the browser UI. See `PROOF_OF_WORK.md` for detailed documentation.
+**Note:** Difficulty scales exponentially - each level increases computation time by ~16x due to hexadecimal hash space. The proof-of-work challenge runs in a Web Worker, so it doesn't block the browser UI. See `PROOF_OF_WORK.md` for detailed documentation.
 
 #### Screen Resolution Check
 - **Enable screen resolution check:** Detects obviously fake resolutions and headless browsers
@@ -106,7 +107,7 @@ All features are configurable at **Administration > Configuration > System > Bot
   - Blocks impossible aspect ratios (> 3.0)
   - Catches headless browser defaults (800x600, 1280x720)
   - Detects phone UAs with desktop resolutions
-  
+
 **Note:** iPads with Safari report as "Macintosh" (desktop) in their User-Agent, so the check is permissive with tablet-sized resolutions to avoid false positives. The focus is on catching automation tools rather than precise device type validation.
 
 #### Rate Limiting

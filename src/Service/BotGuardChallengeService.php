@@ -6,6 +6,7 @@ use Drupal\Component\Utility\Crypt;
 use Drupal\Core\Cache\CacheBackendInterface;
 use Drupal\Core\Config\ConfigFactoryInterface;
 use Drupal\Core\Extension\ModuleHandlerInterface;
+use Drupal\Core\StringTranslation\StringTranslationTrait;
 use Symfony\Component\HttpFoundation\Response;
 use Symfony\Component\HttpKernel\Event\RequestEvent;
 
@@ -13,6 +14,8 @@ use Symfony\Component\HttpKernel\Event\RequestEvent;
  * Service for handling bot guard challenge, cookie validation and proof-of-work.
  */
 class BotGuardChallengeService {
+
+  use StringTranslationTrait;
 
   /**
    * The config factory service.
@@ -187,7 +190,7 @@ class BotGuardChallengeService {
     if ($powEnabled) {
       // Generate proof-of-work challenge
       $powChallenge = $this->generatePowChallenge($ip, $ua, $exp);
-      $powDifficulty = (int) ($config->get('pow_difficulty') ?? 5);
+      $powDifficulty = (int) ($config->get('pow_difficulty') ?? 3);
       $powMaxIterations = (int) ($config->get('pow_max_iterations') ?? 10000000);
       $powTimeout = (int) ($config->get('pow_timeout') ?? 30);
 
@@ -264,8 +267,8 @@ class BotGuardChallengeService {
   protected function buildSimpleChallengePage(string $cookieName, int $exp, string $sig): string {
     return '<!doctype html><html><head><meta charset="utf-8">' .
       '<meta http-equiv="refresh" content="1">' .
-      '<title>Verifying…</title></head><body>' .
-      '<noscript>JavaScript required.</noscript>' .
+      '<title>' . $this->t('Verifying…') . '</title></head><body>' .
+      '<noscript>' . $this->t('JavaScript required.') . '</noscript>' .
       '<script>(function(){try{' .
       'var exp=' . ($exp * 1000) . ';' .
       'var d=new Date(exp);' .
@@ -353,7 +356,7 @@ WORKER;
 
     $html = '<!doctype html><html><head><meta charset="utf-8">' .
       '<meta name="viewport" content="width=device-width, initial-scale=1">' .
-      '<title>Verifying Your Browser…</title><style>' .
+      '<title>' . $this->t('Verifying Your Browser') . '</title><style>' .
       'body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;background:#f5f5f5}' .
       '.container{text-align:center;padding:2rem;background:white;border-radius:8px;box-shadow:0 2px 10px rgba(0,0,0,0.1);max-width:400px}' .
       '.spinner{border:3px solid #f3f3f3;border-top:3px solid #3498db;border-radius:50%;width:40px;height:40px;animation:spin 1s linear infinite;margin:0 auto 1rem}' .
@@ -363,12 +366,12 @@ WORKER;
       'noscript{display:block;padding:1rem;background:#fff3cd;border:1px solid #ffc107;border-radius:4px}' .
       '</style></head><body>' .
       '<div class="container"><div class="spinner"></div>' .
-      '<h2>Verifying Your Browser</h2>' .
-      '<p>Please wait while we verify your browser...</p>' .
+      '<h2>' . $this->t('Verifying Your Browser') . '</h2>' .
+      '<p>' . $this->t('Please wait while we verify your browser...') . '</p>' .
       '<div class="progress" id="progress"></div>' .
       '<div class="error" id="error"></div></div>' .
-      '<noscript><div class="container"><h2>JavaScript Required</h2>' .
-      '<p>Please enable JavaScript to continue.</p></div></noscript>' .
+      '<noscript><div class="container"><h2>' . $this->t('JavaScript Required') . '</h2>' .
+      '<p>' . $this->t('Please enable JavaScript to continue.') . '</p></div></noscript>' .
       '<script>(async function(){' .
       'const challenge=' . $challengeJson . ';' .
       'const difficulty=' . $difficulty . ';' .
@@ -384,19 +387,19 @@ WORKER;
       'const blob=new Blob([workerBlob],{type:"application/javascript"});' .
       'const workerUrl=URL.createObjectURL(blob);' .
       'const worker=new Worker(workerUrl);' .
-      'const timeoutId=setTimeout(()=>{worker.terminate();errorEl.textContent="Challenge timeout. Please refresh to try again.";},timeout*1000);' .
+      'const timeoutId=setTimeout(()=>{worker.terminate();errorEl.textContent="' . $this->t('Challenge timeout. Please refresh to try again.') . '";},timeout*1000);' .
       'worker.onmessage=function(e){' .
-      'if(e.data.progress){progressEl.textContent="Computing: "+e.data.progress.toLocaleString()+" attempts...";}' .
+      'if(e.data.progress){progressEl.textContent="' . $this->t('Computing') . ': "+e.data.progress.toLocaleString()+" attempts...";}' .
       'else if(e.data.success){clearTimeout(timeoutId);worker.terminate();URL.revokeObjectURL(workerUrl);' .
       'const scr=screen.width+"x"+screen.height;' .
       'const payload=btoa(JSON.stringify({ts:exp,scr:scr,pow:{challenge:challenge,nonce:e.data.nonce,hash:e.data.hash}}));' .
       'const d=new Date(exp);const val=payload+"."+sig;' .
       'document.cookie=cookieName+"="+val+";path=/;expires="+d.toUTCString()+";SameSite=Lax";' .
-      'progressEl.textContent="Verification complete! Redirecting...";setTimeout(()=>location.reload(),500);}' .
+      'progressEl.textContent="' . $this->t('Verification complete! Redirecting...') . '";setTimeout(()=>location.reload(),500);}' .
       'else{clearTimeout(timeoutId);worker.terminate();URL.revokeObjectURL(workerUrl);' .
-      'errorEl.textContent="Challenge failed: "+(e.data.error||"Unknown error");}};' .
+      'errorEl.textContent="' . $this->t('Challenge failed: ') . ' "+(e.data.error||"' . $this->t('Unknown error') . '");}};' .
       'worker.onerror=function(error){clearTimeout(timeoutId);worker.terminate();URL.revokeObjectURL(workerUrl);' .
-      'errorEl.textContent="Worker error: "+error.message;};' .
+      'errorEl.textContent="' . $this->t('Worker error: ') . ' "+error.message;};' .
       'worker.postMessage({challenge,difficulty,maxIterations});}' .
       'catch(error){errorEl.textContent="Error: "+error.message;}})();</script>' .
       '</body></html>';
