@@ -69,6 +69,14 @@ class SettingsForm extends ConfigFormBase {
       '#default_value' => $config->get('enabled') ?? TRUE,
     ];
 
+    $form['trusted_proxies'] = [
+      '#type' => 'textarea',
+      '#title' => 'Trusted Proxy IPs/ranges (CIDR notation, one per line)',
+      '#default_value' => $config->get('trusted_proxies') ?? '',
+      '#description' => 'IP addresses or ranges of trusted reverse proxies (e.g., Traefik, Nginx, Cloudflare). When a request comes from a trusted proxy, Bot Guard will check X-Forwarded-For, X-Real-IP, and other proxy headers to determine the real client IP. <strong>Security Warning:</strong> Only add IPs you control! Adding untrusted IPs allows IP spoofing attacks. Common examples: Docker subnet (172.17.0.0/16), Traefik container IP, or Cloudflare IP ranges.',
+      '#rows' => 3,
+    ];
+
     $form['allow_ips'] = [
       '#type' => 'textarea',
       '#title' => 'IP Allow-list (CIDR notation, one per line)',
@@ -290,6 +298,7 @@ class SettingsForm extends ConfigFormBase {
   public function submitForm(array &$form, FormStateInterface $form_state): void {
     $config = $this->config('bot_guard.settings')
       ->set('enabled', $form_state->getValue('enabled'))
+      ->set('trusted_proxies', $form_state->getValue('trusted_proxies'))
       ->set('allow_ips', $form_state->getValue('allow_ips'))
       ->set('allow_paths', $form_state->getValue('allow_paths'))
       ->set('allow_bots', $form_state->getValue('allow_bots'))

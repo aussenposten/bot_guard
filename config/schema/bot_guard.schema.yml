@@ -5,6 +5,9 @@ bot_guard.settings:
     enabled:
       type: boolean
       label: 'Enable Bot Guard'
+    trusted_proxies:
+      type: text
+      label: 'Trusted Proxy IPs/ranges (CIDR notation, one per line)'
     allow_ips:
       type: text
       label: 'IP Allow-list (CIDR notation, one per line)'

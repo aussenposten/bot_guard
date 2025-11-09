@@ -161,7 +161,7 @@ class BotGuardSubscriber implements EventSubscriberInterface {
     $request = $event->getRequest();
     $ua = $request->headers->get('User-Agent', '');
     $path = $request->getPathInfo();
-    $ip = $request->getClientIp() ?? '0.0.0.0';
+    $ip = $this->getTrustedClientIp($request, $config);
     $method = $request->getMethod();
     $this->screenResolution = $request->cookies->get('bg_scr', '');
 
@@ -900,6 +900,74 @@ class BotGuardSubscriber implements EventSubscriberInterface {
 
     // Check if IP is in subnet.
     return ($ip_long & $mask_long) === ($subnet_long & $mask_long);
+  }
+
+  /**
+   * Get the trusted client IP address from request.
+   *
+   * Handles various reverse proxy scenarios (Traefik, Nginx, Cloudflare, etc.).
+   * Checks multiple headers in order of preference and validates against
+   * trusted proxy ranges.
+   *
+   * @param \Symfony\Component\HttpFoundation\Request $request
+   *   The current request.
+   * @param \Drupal\Core\Config\ImmutableConfig $config
+   *   The module configuration.
+   *
+   * @return string
+   *   The client IP address.
+   */
+  private function getTrustedClientIp($request, $config): string {
+    // Get the immediate client IP (might be proxy).
+    $immediateIp = $request->getClientIp() ?? '0.0.0.0';
+
+    // Get trusted proxy IPs/ranges from config.
+    $trustedProxies = (string) $config->get('trusted_proxies');
+    
+    // If no trusted proxies configured, use immediate IP.
+    if (empty($trustedProxies)) {
+      return $immediateIp;
+    }
+
+    // Check if immediate IP is a trusted proxy.
+    $isTrustedProxy = $this->ipInAllowlist($immediateIp, $trustedProxies);
+    
+    // If not from trusted proxy, return immediate IP.
+    if (!$isTrustedProxy) {
+      return $immediateIp;
+    }
+
+    // Priority order of headers to check (most reliable first).
+    $headers = [
+      'HTTP_CF_CONNECTING_IP',     // Cloudflare
+      'HTTP_X_REAL_IP',            // Nginx, Traefik
+      'HTTP_X_FORWARDED_FOR',      // Standard proxy header
+      'HTTP_X_FORWARDED',          // Alternative
+      'HTTP_FORWARDED_FOR',        // RFC 7239
+      'HTTP_FORWARDED',            // RFC 7239
+      'HTTP_CLIENT_IP',            // Some proxies
+    ];
+
+    foreach ($headers as $header) {
+      if (!empty($_SERVER[$header])) {
+        $ip = $_SERVER[$header];
+        
+        // X-Forwarded-For can contain multiple IPs (client, proxy1, proxy2).
+        // Take the first (leftmost) IP as it's the original client.
+        if (str_contains($ip, ',')) {
+          $ips = array_map('trim', explode(',', $ip));
+          $ip = $ips[0];
+        }
+
+        // Validate IP format.
+        if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE)) {
+          return $ip;
+        }
+      }
+    }
+
+    // Fallback to immediate IP if no valid header found.
+    return $immediateIp;
   }
 
 }
