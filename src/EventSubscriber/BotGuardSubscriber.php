@@ -216,14 +216,6 @@ class BotGuardSubscriber implements EventSubscriberInterface {
       return;
     }
 
-    // Suspicious screen resolution.
-    $resolutionCheckEnabled = (bool) ($config->get('resolution_check_enabled') ?? TRUE);
-    if ($resolutionCheckEnabled && $this->isSuspiciousScreenResolution($ua, $this->screenResolution)) {
-      $this->storeDecision($cacheEnabled, $cacheKey, self::BLOCK, $cacheTtl);
-      $this->deny($event, $config, $ip, $ua, $path, 'suspicious-resolution');
-      return;
-    }
-
     // Block-list UA patterns.
     if ($this->matchesAny($ua, (string) $config->get('block_bots'))) {
       $this->storeDecision($cacheEnabled, $cacheKey, self::BLOCK, $cacheTtl);
@@ -262,6 +254,15 @@ class BotGuardSubscriber implements EventSubscriberInterface {
         return;
       }
       // If a valid cookie exists, the request proceeds.
+    }
+
+    // Suspicious screen resolution.
+    // Only check if challenge is enabled and a valid cookie exists (JS was executed).
+    $resolutionCheckEnabled = (bool) ($config->get('resolution_check_enabled') ?? TRUE);
+    if ($challengeEnabled && $resolutionCheckEnabled && $this->isSuspiciousScreenResolution($ua, $this->screenResolution)) {
+      $this->storeDecision($cacheEnabled, $cacheKey, self::BLOCK, $cacheTtl);
+      $this->deny($event, $config, $ip, $ua, $path, 'suspicious-resolution');
+      return;
     }
 
     // Facet Bot Blocking.
@@ -923,7 +924,7 @@ class BotGuardSubscriber implements EventSubscriberInterface {
 
     // Get trusted proxy IPs/ranges from config.
     $trustedProxies = (string) $config->get('trusted_proxies');
-    
+
     // If no trusted proxies configured, use immediate IP.
     if (empty($trustedProxies)) {
       return $immediateIp;
@@ -931,7 +932,7 @@ class BotGuardSubscriber implements EventSubscriberInterface {
 
     // Check if immediate IP is a trusted proxy.
     $isTrustedProxy = $this->ipInAllowlist($immediateIp, $trustedProxies);
-    
+
     // If not from trusted proxy, return immediate IP.
     if (!$isTrustedProxy) {
       return $immediateIp;
@@ -951,7 +952,7 @@ class BotGuardSubscriber implements EventSubscriberInterface {
     foreach ($headers as $header) {
       if (!empty($_SERVER[$header])) {
         $ip = $_SERVER[$header];
-        
+
         // X-Forwarded-For can contain multiple IPs (client, proxy1, proxy2).
         // Take the first (leftmost) IP as it's the original client.
         if (str_contains($ip, ',')) {
