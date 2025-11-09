@@ -220,6 +220,43 @@ class SettingsForm extends ConfigFormBase {
       '#min' => 60,
     ];
 
+    // Proof-of-Work Challenge.
+    $form['pow_challenge'] = [
+      '#type' => 'details',
+      '#title' => 'Proof-of-Work Challenge',
+      '#open' => TRUE,
+      '#description' => 'Anubis-style proof-of-work challenge to ensure clients can compute SHA-256 hashes. This validates that clients are using modern browsers and not simple bots.',
+    ];
+    $form['pow_challenge']['pow_enabled'] = [
+      '#type' => 'checkbox',
+      '#title' => 'Enable proof-of-work challenge',
+      '#default_value' => $config->get('pow_enabled') ?? TRUE,
+      '#description' => 'Requires clients to solve a SHA-256 hash puzzle with a specified difficulty (leading zeros).',
+    ];
+    $form['pow_challenge']['pow_difficulty'] = [
+      '#type' => 'number',
+      '#title' => 'Difficulty (leading zeros)',
+      '#default_value' => $config->get('pow_difficulty') ?? 5,
+      '#min' => 3,
+      '#max' => 8,
+      '#description' => 'Number of leading zeros required in the hash. Default is 5 (similar to Anubis). Higher values increase computation time exponentially. 3-4 = very fast, 5-6 = moderate (1-10s), 7-8 = slow (10s-minutes).',
+    ];
+    $form['pow_challenge']['pow_max_iterations'] = [
+      '#type' => 'number',
+      '#title' => 'Maximum iterations',
+      '#default_value' => $config->get('pow_max_iterations') ?? 10000000,
+      '#min' => 100000,
+      '#description' => 'Maximum number of hash attempts before giving up. Prevents infinite loops.',
+    ];
+    $form['pow_challenge']['pow_timeout'] = [
+      '#type' => 'number',
+      '#title' => 'Client timeout (seconds)',
+      '#default_value' => $config->get('pow_timeout') ?? 30,
+      '#min' => 10,
+      '#max' => 120,
+      '#description' => 'Maximum time allowed for the client to solve the challenge.',
+    ];
+
     // Decision Cache.
     $form['decision_cache'] = [
       '#type' => 'details',
@@ -308,6 +345,10 @@ class SettingsForm extends ConfigFormBase {
       ->set('challenge_enabled', $form_state->getValue('challenge_enabled'))
       ->set('cookie_name', $form_state->getValue('cookie_name'))
       ->set('cookie_ttl', $form_state->getValue('cookie_ttl'))
+      ->set('pow_enabled', $form_state->getValue('pow_enabled'))
+      ->set('pow_difficulty', $form_state->getValue('pow_difficulty'))
+      ->set('pow_max_iterations', $form_state->getValue('pow_max_iterations'))
+      ->set('pow_timeout', $form_state->getValue('pow_timeout'))
       ->set('cache_enabled', $form_state->getValue('cache_enabled'))
       ->set('cache_ttl', $form_state->getValue('cache_ttl'))
       ->set('block_status_code', $form_state->getValue('block_status_code'))

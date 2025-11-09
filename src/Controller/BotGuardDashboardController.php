@@ -373,6 +373,7 @@ class BotGuardDashboardController extends ControllerBase {
       'facet-flood-ban',
       'ratelimit',
       'method-block',
+      'challenge-failed',
     ];
 
     foreach ($known_reasons as $reason) {
@@ -405,6 +406,7 @@ class BotGuardDashboardController extends ControllerBase {
       'facet-flood-ban',
       'ratelimit',
       'method-block',
+      'challenge-failed',
     ];
 
     foreach ($known_reasons as $reason) {
@@ -473,6 +475,13 @@ class BotGuardDashboardController extends ControllerBase {
                '<span style="font-size:0.9em" title="' . htmlspecialchars($ua, ENT_QUOTES) . '">' . 
                htmlspecialchars($ua_short, ENT_QUOTES) . '</span>';
         
+      case 'challenge-failed':
+        // Show that cookie was present but invalid
+        $cookie_present = !empty($entry['cookie_present']) ? 'Yes (invalid/expired)' : 'No';
+        return '<strong>Cookie:</strong> ' . htmlspecialchars($cookie_present, ENT_QUOTES) . '<br>' .
+               '<span style="font-size:0.9em" title="' . htmlspecialchars($ua, ENT_QUOTES) . '">' . 
+               htmlspecialchars($ua_short, ENT_QUOTES) . '</span>';
+        
       case 'ua-block':
       case 'ua-short':
         // Show full UA (most important for these reasons)
@@ -519,6 +528,7 @@ class BotGuardDashboardController extends ControllerBase {
       'facet-flood-ban' => $this->t('Facet Flood Pattern Detected'),
       'ratelimit' => $this->t('Rate Limit Exceeded'),
       'method-block' => $this->t('HTTP Method Block'),
+      'challenge-failed' => $this->t('Challenge Failed (Invalid/Expired Cookie)'),
     ];
 
     return $map[$reason] ?? $this->t('Unknown (@reason)', ['@reason' => $reason]);

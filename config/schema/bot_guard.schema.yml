@@ -60,6 +60,20 @@ bot_guard.settings:
       type: integer
       label: 'Cookie TTL seconds'
 
+    # Proof-of-work challenge
+    pow_enabled:
+      type: boolean
+      label: 'Enable proof-of-work challenge'
+    pow_difficulty:
+      type: integer
+      label: 'Proof-of-work difficulty (leading zeros)'
+    pow_max_iterations:
+      type: integer
+      label: 'Maximum iterations before timeout'
+    pow_timeout:
+      type: integer
+      label: 'Client-side timeout in seconds'
+
     # Decision cache
     cache_enabled:
       type: boolean

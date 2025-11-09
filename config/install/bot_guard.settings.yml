@@ -67,6 +67,12 @@ challenge_enabled: true
 cookie_name: bg_chal
 cookie_ttl: 86400
 
+# Proof-of-work challenge
+pow_enabled: true
+pow_difficulty: 5
+pow_max_iterations: 10000000
+pow_timeout: 30
+
 # Decision cache
 cache_enabled: true
 cache_ttl: 300
