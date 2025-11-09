@@ -1,4 +1,11 @@
 services:
+  bot_guard.metrics:
+    class: Drupal\bot_guard\Service\BotGuardMetricsService
+    arguments:
+      - '@cache.default'
+      - '@datetime.time'
+      - '@module_handler'
+
   bot_guard.subscriber:
     class: Drupal\bot_guard\EventSubscriber\BotGuardSubscriber
     arguments:
@@ -7,5 +14,6 @@ services:
       - '@module_handler'
       - '@cache.default'
       - '@datetime.time'
+      - '@bot_guard.metrics'
     tags:
       - { name: event_subscriber }

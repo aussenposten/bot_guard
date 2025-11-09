@@ -2,8 +2,8 @@
 
 namespace Drupal\bot_guard\Controller;
 
+use Drupal\bot_guard\Service\BotGuardMetricsService;
 use Drupal\Component\Datetime\TimeInterface;
-use Drupal\Component\Render\FormattableMarkup;
 use Drupal\Core\Cache\CacheBackendInterface;
 use Drupal\Core\Config\ConfigFactoryInterface;
 use Drupal\Core\Controller\ControllerBase;
@@ -36,6 +36,13 @@ class BotGuardDashboardController extends ControllerBase {
   protected $configFactory;
 
   /**
+   * The metrics service.
+   *
+   * @var \Drupal\bot_guard\Service\BotGuardMetricsService
+   */
+  protected $metricsService;
+
+  /**
    * Constructs a BotGuardDashboardController object.
    *
    * @param \Drupal\Core\Cache\CacheBackendInterface $cache
@@ -44,15 +51,19 @@ class BotGuardDashboardController extends ControllerBase {
    *   The time service.
    * @param \Drupal\Core\Config\ConfigFactoryInterface $configFactory
    *   The config factory service.
+   * @param \Drupal\bot_guard\Service\BotGuardMetricsService $metricsService
+   *   The metrics service.
    */
   public function __construct(
     CacheBackendInterface $cache,
     TimeInterface $time,
-    ConfigFactoryInterface $configFactory
+    ConfigFactoryInterface $configFactory,
+    BotGuardMetricsService $metricsService
   ) {
     $this->cache = $cache;
     $this->time = $time;
     $this->configFactory = $configFactory;
+    $this->metricsService = $metricsService;
   }
 
   /**
@@ -63,6 +74,7 @@ class BotGuardDashboardController extends ControllerBase {
       $container->get('cache.default'),
       $container->get('datetime.time'),
       $container->get('config.factory'),
+      $container->get('bot_guard.metrics'),
     );
   }
 
@@ -77,6 +89,9 @@ class BotGuardDashboardController extends ControllerBase {
    */
   public function dashboard(): array {
     $config = $this->configFactory->get('bot_guard.settings');
+
+    // Initialize metrics early to ensure start time is set.
+    $this->metricsService->ensureMetricsInitialized();
 
     // Check cache availability
     $cache_backend = $this->getCacheBackendName();
@@ -162,9 +177,15 @@ class BotGuardDashboardController extends ControllerBase {
         [$this->t('IP Address'), $last['ip'] ?? $this->t('Unknown')],
         [$this->t('Path'), $last['path'] ?? $this->t('Unknown')],
         [$this->t('User Agent'), $last['ua'] ?? $this->t('Unknown')],
-        [$this->t('Block Reason'), $this->formatReason($last['reason'] ?? 'unknown')],
+        [
+          $this->t('Block Reason'),
+          $this->formatReason($last['reason'] ?? 'unknown'),
+        ],
         [$this->t('Timestamp'), date('Y-m-d H:i:s', $last_time)],
-        [$this->t('Time Ago'), $this->formatTimeAgo($this->time->getRequestTime() - $last_time)],
+        [
+          $this->t('Time Ago'),
+          $this->formatTimeAgo($this->time->getRequestTime() - $last_time),
+        ],
       ];
     }
 
@@ -456,4 +477,5 @@ class BotGuardDashboardController extends ControllerBase {
       return $this->t('@count days ago', ['@count' => round($seconds / 86400)]);
     }
   }
+
 }

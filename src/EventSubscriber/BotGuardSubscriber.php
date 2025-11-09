@@ -2,6 +2,7 @@
 
 namespace Drupal\bot_guard\EventSubscriber;
 
+use Drupal\bot_guard\Service\BotGuardMetricsService;
 use Drupal\Component\Datetime\TimeInterface;
 use Drupal\Core\Cache\CacheBackendInterface;
 use Drupal\Core\Config\ConfigFactoryInterface;
@@ -54,6 +55,13 @@ class BotGuardSubscriber implements EventSubscriberInterface {
   protected $time;
 
   /**
+   * The metrics service.
+   *
+   * @var \Drupal\bot_guard\Service\BotGuardMetricsService
+   */
+  protected $metricsService;
+
+  /**
    * The screen resolution from the client.
    *
    * @var string
@@ -94,19 +102,23 @@ class BotGuardSubscriber implements EventSubscriberInterface {
    *   The cache backend.
    * @param \Drupal\Component\Datetime\TimeInterface $time
    *   The time service.
+   * @param \Drupal\bot_guard\Service\BotGuardMetricsService $metrics_service
+   *   The metrics service.
    */
   public function __construct(
     ConfigFactoryInterface $config_factory,
     AccountProxyInterface $current_user,
     ModuleHandlerInterface $module_handler,
     CacheBackendInterface $cache_backend,
-    TimeInterface $time
+    TimeInterface $time,
+    BotGuardMetricsService $metrics_service
   ) {
     $this->configFactory = $config_factory;
     $this->currentUser = $current_user;
     $this->moduleHandler = $module_handler;
     $this->cacheBackend = $cache_backend;
     $this->time = $time;
+    $this->metricsService = $metrics_service;
   }
 
   /**
@@ -130,6 +142,10 @@ class BotGuardSubscriber implements EventSubscriberInterface {
     if (!$event->isMainRequest()) {
       return;
     }
+
+    // Initialize metrics early, regardless of subsequent checks.
+    // This ensures the start time is set even if the request is bypassed.
+    $this->metricsService->ensureMetricsInitialized();
 
     if ($this->currentUser->hasPermission('bypass bot guard')) {
       return;
@@ -181,18 +197,6 @@ class BotGuardSubscriber implements EventSubscriberInterface {
       }
     }
 
-    // Initialize metrics start time (once).
-    if ($this->isCacheAvailable()) {
-      if ($this->usePersistentCache()) {
-        if (!$this->cacheBackend->get('bg.metrics.start')) {
-          $this->cacheBackend->set('bg.metrics.start', $this->time->getRequestTime());
-        }
-      }
-      elseif (function_exists('apcu_store') && !apcu_exists('bg.metrics.start')) {
-        apcu_store('bg.metrics.start', time(), 0);
-      }
-    }
-
     // Allow-list quick path.
     if ($this->matchesAny($ua, (string) $config->get('allow_bots'))) {
       $this->incrementAllowedCounter();
@@ -221,7 +225,7 @@ class BotGuardSubscriber implements EventSubscriberInterface {
     }
 
     // Block-list UA patterns.
-    if ($ua !== '' && $this->matchesAny($ua, (string) $config->get('block_bots'))) {
+    if ($this->matchesAny($ua, (string) $config->get('block_bots'))) {
       $this->storeDecision($cacheEnabled, $cacheKey, self::BLOCK, $cacheTtl);
       $this->deny($event, $config, $ip, $ua, $path, 'ua-block');
       return;
@@ -249,14 +253,13 @@ class BotGuardSubscriber implements EventSubscriberInterface {
         if (in_array($method, ['GET', 'HEAD'], TRUE)) {
           $this->storeDecision($cacheEnabled, $cacheKey, self::CHALLENGE_PENDING, $cacheTtl);
           $this->serveChallenge($event, $cookieName, $cookieTtl, $ip, $ua);
-          return;
         }
         // For other methods like POST, block if no valid cookie is present.
         else {
           $this->storeDecision($cacheEnabled, $cacheKey, self::BLOCK, $cacheTtl);
           $this->deny($event, $config, $ip, $ua, $path, 'method-block');
-          return;
         }
+        return;
       }
       // If a valid cookie exists, the request proceeds.
     }
@@ -492,10 +495,6 @@ class BotGuardSubscriber implements EventSubscriberInterface {
 
     if ($this->usePersistentCache()) {
       // Use Drupal cache backend (Memcache/Redis)
-      if (!$this->cacheBackend->get('bg.metrics.start')) {
-        $this->cacheBackend->set('bg.metrics.start', $this->time->getRequestTime());
-      }
-
       // Global blocked counter
       $blocked_cache = $this->cacheBackend->get('bg.blocked.count');
       $blocked = $blocked_cache ? $blocked_cache->data : 0;
@@ -531,10 +530,6 @@ class BotGuardSubscriber implements EventSubscriberInterface {
     }
     elseif (function_exists('apcu_fetch')) {
       // APCu fallback.
-      if (!apcu_exists('bg.metrics.start')) {
-        apcu_store('bg.metrics.start', time(), 0);
-      }
-
       $blocked = apcu_fetch('bg.blocked.count');
       apcu_store('bg.blocked.count', ($blocked === FALSE ? 1 : ((int) $blocked) + 1), 0);
 
