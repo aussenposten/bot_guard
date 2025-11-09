@@ -2,6 +2,11 @@
 
 namespace Drupal\bot_guard\EventSubscriber;
 
+use Drupal\bot_guard\Service\BotGuardBlockTokenService;
+use Drupal\bot_guard\Service\BotGuardChallengeService;
+use Drupal\bot_guard\Service\BotGuardDetectionHelper;
+use Drupal\bot_guard\Service\BotGuardFacetService;
+use Drupal\bot_guard\Service\BotGuardIpHelper;
 use Drupal\bot_guard\Service\BotGuardMetricsService;
 use Drupal\Component\Datetime\TimeInterface;
 use Drupal\Core\Cache\CacheBackendInterface;
@@ -12,7 +17,6 @@ use Symfony\Component\HttpKernel\KernelEvents;
 use Symfony\Component\HttpKernel\Event\RequestEvent;
 use Symfony\Component\EventDispatcher\EventSubscriberInterface;
 use Symfony\Component\HttpFoundation\Response;
-use Drupal\Component\Utility\Crypt;
 
 /**
  * Event subscriber to check and block requests.
@@ -62,11 +66,39 @@ class BotGuardSubscriber implements EventSubscriberInterface {
   protected $metricsService;
 
   /**
-   * The screen resolution from the client.
+   * The challenge service.
    *
-   * @var string
+   * @var \Drupal\bot_guard\Service\BotGuardChallengeService
    */
-  protected $screenResolution = '';
+  protected $challengeService;
+
+  /**
+   * The facet service.
+   *
+   * @var \Drupal\bot_guard\Service\BotGuardFacetService
+   */
+  protected $facetService;
+
+  /**
+   * The IP helper.
+   *
+   * @var \Drupal\bot_guard\Service\BotGuardIpHelper
+   */
+  protected $ipHelper;
+
+  /**
+   * The detection helper.
+   *
+   * @var \Drupal\bot_guard\Service\BotGuardDetectionHelper
+   */
+  protected $detectionHelper;
+
+  /**
+   * The block token service.
+   *
+   * @var \Drupal\bot_guard\Service\BotGuardBlockTokenService
+   */
+  protected $blockTokenService;
 
   /**
    * Cache decision state: Allow the request.
@@ -104,6 +136,16 @@ class BotGuardSubscriber implements EventSubscriberInterface {
    *   The time service.
    * @param \Drupal\bot_guard\Service\BotGuardMetricsService $metrics_service
    *   The metrics service.
+   * @param \Drupal\bot_guard\Service\BotGuardChallengeService $challenge_service
+   *   The challenge service.
+   * @param \Drupal\bot_guard\Service\BotGuardFacetService $facet_service
+   *   The facet service.
+   * @param \Drupal\bot_guard\Service\BotGuardIpHelper $ip_helper
+   *   The IP helper.
+   * @param \Drupal\bot_guard\Service\BotGuardDetectionHelper $detection_helper
+   *   The detection helper.
+   * @param \Drupal\bot_guard\Service\BotGuardBlockTokenService $block_token_service
+   *   The block token service.
    */
   public function __construct(
     ConfigFactoryInterface $config_factory,
@@ -111,7 +153,12 @@ class BotGuardSubscriber implements EventSubscriberInterface {
     ModuleHandlerInterface $module_handler,
     CacheBackendInterface $cache_backend,
     TimeInterface $time,
-    BotGuardMetricsService $metrics_service
+    BotGuardMetricsService $metrics_service,
+    BotGuardChallengeService $challenge_service,
+    BotGuardFacetService $facet_service,
+    BotGuardIpHelper $ip_helper,
+    BotGuardDetectionHelper $detection_helper,
+    BotGuardBlockTokenService $block_token_service
   ) {
     $this->configFactory = $config_factory;
     $this->currentUser = $current_user;
@@ -119,6 +166,11 @@ class BotGuardSubscriber implements EventSubscriberInterface {
     $this->cacheBackend = $cache_backend;
     $this->time = $time;
     $this->metricsService = $metrics_service;
+    $this->challengeService = $challenge_service;
+    $this->facetService = $facet_service;
+    $this->ipHelper = $ip_helper;
+    $this->detectionHelper = $detection_helper;
+    $this->blockTokenService = $block_token_service;
   }
 
   /**
@@ -161,25 +213,26 @@ class BotGuardSubscriber implements EventSubscriberInterface {
     $request = $event->getRequest();
     $ua = $request->headers->get('User-Agent', '');
     $path = $request->getPathInfo();
-    $ip = $this->getTrustedClientIp($request, $config);
+    $trustedProxies = (string) $config->get('trusted_proxies');
+    $ip = $this->ipHelper->getTrustedClientIp($request, $trustedProxies);
     $method = $request->getMethod();
 
     // IP Allow-list (bypass all checks).
     $allowIps = (string) $config->get('allow_ips');
-    if ($allowIps && $this->ipInAllowlist($ip, $allowIps)) {
+    if ($allowIps && $this->ipHelper->ipInAllowlist($ip, $allowIps)) {
       return;
     }
 
     // Path Allow-list (bypass all checks).
     $allowPaths = (string) $config->get('allow_paths');
-    if ($allowPaths && $this->matchesAny($path, $allowPaths)) {
+    if ($allowPaths && $this->detectionHelper->matchesAny($path, $allowPaths)) {
       return;
     }
 
     // Decision cache.
     $cacheEnabled = (bool) $config->get('cache_enabled');
     $cacheTtl = (int) ($config->get('cache_ttl') ?? 300);
-    $cacheKey = $this->cacheKey($ip, $ua, $path);
+    $cacheKey = $this->detectionHelper->cacheKey($ip, $ua, $path);
 
     if ($cacheEnabled && function_exists('apcu_fetch')) {
       $decision = apcu_fetch($cacheKey);
@@ -197,27 +250,27 @@ class BotGuardSubscriber implements EventSubscriberInterface {
     }
 
     // Allow-list quick path.
-    if ($this->matchesAny($ua, (string) $config->get('allow_bots'))) {
+    if ($this->detectionHelper->matchesAny($ua, (string) $config->get('allow_bots'))) {
       $this->incrementAllowedCounter();
-      $this->storeDecision($cacheEnabled, $cacheKey, self::ALLOW, $cacheTtl);
+      $this->detectionHelper->storeDecision($cacheEnabled, $cacheKey, self::ALLOW, $cacheTtl);
       return;
     }
 
     // Heuristics: empty/short UA, missing Accept-Language.
     if ($ua === '' || strlen($ua) < 10) {
-      $this->storeDecision($cacheEnabled, $cacheKey, self::BLOCK, $cacheTtl);
+      $this->detectionHelper->storeDecision($cacheEnabled, $cacheKey, self::BLOCK, $cacheTtl);
       $this->deny($event, $config, $ip, $ua, $path, 'ua-short');
       return;
     }
     if ($request->headers->get('Accept-Language') === NULL || $request->headers->get('Accept-Language') === '') {
-      $this->storeDecision($cacheEnabled, $cacheKey, self::BLOCK, $cacheTtl);
+      $this->detectionHelper->storeDecision($cacheEnabled, $cacheKey, self::BLOCK, $cacheTtl);
       $this->deny($event, $config, $ip, $ua, $path, 'no-accept-language');
       return;
     }
 
     // Block-list UA patterns.
-    if ($this->matchesAny($ua, (string) $config->get('block_bots'))) {
-      $this->storeDecision($cacheEnabled, $cacheKey, self::BLOCK, $cacheTtl);
+    if ($this->detectionHelper->matchesAny($ua, (string) $config->get('block_bots'))) {
+      $this->detectionHelper->storeDecision($cacheEnabled, $cacheKey, self::BLOCK, $cacheTtl);
       $this->deny($event, $config, $ip, $ua, $path, 'ua-block');
       return;
     }
@@ -225,8 +278,8 @@ class BotGuardSubscriber implements EventSubscriberInterface {
     // Rate limit.
     $max = (int) ($config->get('rate_limit') ?? 20);
     $win = (int) ($config->get('rate_window') ?? 10);
-    if ($max > 0 && function_exists('apcu_fetch')) {
-      if (!$this->rateCheck($ip, $max, $win)) {
+    if ($max > 0) {
+      if (!$this->detectionHelper->rateCheck($ip, $max, $win)) {
         // 429 not cached (small window anyway)
         $this->deny429($event, $config, $ip, $ua, $path, 'ratelimit');
       }
@@ -241,13 +294,13 @@ class BotGuardSubscriber implements EventSubscriberInterface {
     if ($challengeEnabled) {
       // If no valid challenge cookie is present, take action.
       $cookieValue = $request->cookies->get($cookieName);
-      if (!$this->hasValidChallengeCookie($cookieValue, $ip, $ua)) {
+      if (!$this->challengeService->hasValidChallengeCookie($cookieValue, $ip, $ua)) {
         // Determine if this is a failed challenge attempt or first visit
         $isChallengeFailure = !empty($cookieValue);
 
         // For GET/HEAD requests, serve the JS challenge to the browser.
         if (in_array($method, ['GET', 'HEAD'], TRUE)) {
-          $this->storeDecision($cacheEnabled, $cacheKey, self::CHALLENGE_PENDING, $cacheTtl);
+          $this->detectionHelper->storeDecision($cacheEnabled, $cacheKey, self::CHALLENGE_PENDING, $cacheTtl);
 
           // Log failed challenge attempts (invalid/expired cookie)
           if ($isChallengeFailure) {
@@ -256,11 +309,11 @@ class BotGuardSubscriber implements EventSubscriberInterface {
             ]);
           }
 
-          $this->serveChallenge($event, $cookieName, $cookieTtl, $ip, $ua);
+          $this->challengeService->serveChallenge($event, $cookieName, $cookieTtl, $ip, $ua);
         }
         // For other methods like POST, block if no valid cookie is present.
         else {
-          $this->storeDecision($cacheEnabled, $cacheKey, self::BLOCK, $cacheTtl);
+          $this->detectionHelper->storeDecision($cacheEnabled, $cacheKey, self::BLOCK, $cacheTtl);
           $this->deny($event, $config, $ip, $ua, $path, 'method-block');
         }
         return;
@@ -273,11 +326,12 @@ class BotGuardSubscriber implements EventSubscriberInterface {
     // Only check if a valid challenge cookie exists (which contains screen resolution).
     // The resolution is automatically extracted from the cookie in hasValidChallengeCookie().
     $resolutionCheckEnabled = (bool) ($config->get('resolution_check_enabled') ?? TRUE);
-    if ($hasValidChallengeCookie && $resolutionCheckEnabled && !empty($this->screenResolution)) {
-      if ($this->isSuspiciousScreenResolution($ua, $this->screenResolution)) {
-        $this->storeDecision($cacheEnabled, $cacheKey, self::BLOCK, $cacheTtl);
+    $screenResolution = $this->challengeService->getScreenResolution();
+    if ($hasValidChallengeCookie && $resolutionCheckEnabled && !empty($screenResolution)) {
+      if ($this->detectionHelper->isSuspiciousScreenResolution($ua, $screenResolution)) {
+        $this->detectionHelper->storeDecision($cacheEnabled, $cacheKey, self::BLOCK, $cacheTtl);
         $this->deny($event, $config, $ip, $ua, $path, 'suspicious-resolution', [
-          'screen_resolution' => $this->screenResolution,
+          'screen_resolution' => $screenResolution,
         ]);
         return;
       }
@@ -286,154 +340,30 @@ class BotGuardSubscriber implements EventSubscriberInterface {
     // Facet Bot Blocking.
     if ($this->moduleHandler->moduleExists('facets')) {
       $facetEnabled = (bool) ($config->get('facet_enabled') ?? TRUE);
-      $facet_params = $this->getFacetParams($request);
+      $facet_params = $this->facetService->getFacetParams($request);
 
       if ($facetEnabled && !empty($facet_params)) {
-        $limit = (int) ($config->get('facet_limit') ?? 2);
-
-        // Metrics (allowed/blocked + start time) using default cache bin.
-        $cache = $this->cacheBackend;
-        if (!$cache->get('facet_bot.metrics_start')) {
-          $cache->set('facet_bot.metrics_start', time());
-        }
-
-        if (count($facet_params) > $limit) {
-          // Count blocked.
-          $blocked = $cache->get('facet_bot.blocked');
-          $blocked_count = $blocked ? (int) $blocked->data : 0;
-          $cache->set('facet_bot.blocked', $blocked_count + 1);
-
-          // Save last blocked info.
-          $cache->set('facet_bot.last', [
-            'ip' => $ip,
-            'path' => $request->getUri(),
-            'ua' => $ua,
-            'params' => $facet_params,
-          ]);
-
-          // Use centralized error response configuration.
-          $this->storeDecision($cacheEnabled, $cacheKey, self::BLOCK, $cacheTtl);
+        // Check if facet limit is exceeded
+        if ($this->facetService->checkFacetLimit($facet_params, $ip, $ua, $request->getUri())) {
+          $this->detectionHelper->storeDecision($cacheEnabled, $cacheKey, self::BLOCK, $cacheTtl);
           $this->deny($event, $config, $ip, $ua, $path, 'facet-limit');
           return;
         }
-        else {
-          // Count allowed when f[] present and within limit.
-          $allowed = $cache->get('facet_bot.allowed');
-          $allowed_count = $allowed ? (int) $allowed->data : 0;
-          $cache->set('facet_bot.allowed', $allowed_count + 1);
-        }
 
-        // Facet Flood Pattern Detection.
-        $facetFloodEnabled = (bool) ($config->get('facet_flood_enabled') ?? TRUE);
-        $facetThreshold = (int) ($config->get('facet_flood_threshold') ?? 20);
-        $facetWindow = (int) ($config->get('facet_flood_window') ?? 600);
-        $facetBan = (int) ($config->get('facet_flood_ban') ?? 1800);
-
-        if ($facetFloodEnabled && $facetThreshold > 0 && $facetWindow > 0 && function_exists('apcu_fetch')) {
-          // If already banned, deny immediately.
-          $banKey = 'bg_ffp_ban_' . sha1($ip);
-          if (apcu_exists($banKey)) {
-            $this->deny($event, $config, $ip, $ua, $path, 'facet-flood-ban');
-            return;
-          }
-
-          // Compute fingerprint for current facet combination.
-          $sig = $this->facetFingerprint($facet_params);
-
-          // Load or initialize rolling window for this IP.
-          $key = 'bg_ffp_' . sha1($ip);
-          $now = time();
-          $data = apcu_fetch($key);
-          if (!is_array($data) || !isset($data['first_ts']) || ($now - (int) $data['first_ts']) > $facetWindow) {
-            $data = [
-              'unique' => [$sig => TRUE],
-              'count' => 1,
-              'first_ts' => $now,
-            ];
-          }
-          else {
-            if (empty($data['unique'][$sig])) {
-              $data['unique'][$sig] = TRUE;
-              $data['count'] = (int) ($data['count'] ?? 0) + 1;
-            }
-          }
-          apcu_store($key, $data, $facetWindow);
-
-          if ((int) $data['count'] > $facetThreshold) {
-            // Put IP on temporary ban list.
-            apcu_store($banKey, 1, $facetBan);
-
-            // Use centralized error response configuration.
-            $this->storeDecision($cacheEnabled, $cacheKey, self::BLOCK, $cacheTtl);
-            $this->deny($event, $config, $ip, $ua, $path, 'facet-flood-ban');
-            return;
-          }
+        // Check for facet flood pattern
+        if ($this->facetService->checkFacetFlood($facet_params, $ip)) {
+          $this->detectionHelper->storeDecision($cacheEnabled, $cacheKey, self::BLOCK, $cacheTtl);
+          $this->deny($event, $config, $ip, $ua, $path, 'facet-flood-ban');
+          return;
         }
       }
     }
 
     // Passed all checks - count as allowed request.
     $this->incrementAllowedCounter();
-    $this->storeDecision($cacheEnabled, $cacheKey, self::ALLOW, $cacheTtl);
+    $this->detectionHelper->storeDecision($cacheEnabled, $cacheKey, self::ALLOW, $cacheTtl);
   }
 
-  /**
-   * Generate a cache key for a decision.
-   *
-   * @param string $ip
-   *   The client IP address.
-   * @param string $ua
-   *   The client User-Agent string.
-   * @param string $path
-   *   The request path.
-   *
-   * @return string
-   *   A hashed cache key.
-   */
-  private function cacheKey(string $ip, string $ua, string $path): string {
-    // Path bucket to avoid huge key cardinality (first segment only)
-    $seg = explode('/', trim($path, '/'))[0] ?? '';
-    return 'bg:' . sha1($ip . "\n" . $ua . "\n" . $seg);
-  }
-
-  /**
-   * Store a decision in the APCu cache.
-   *
-   * @param bool $enabled
-   *   Whether caching is enabled.
-   * @param string $key
-   *   The cache key.
-   * @param int $value
-   *   The decision value to store (ALLOW, BLOCK, etc.).
-   * @param int $ttl
-   *   The cache lifetime in seconds.
-   */
-  private function storeDecision(bool $enabled, string $key, int $value, int $ttl): void {
-    if ($enabled && function_exists('apcu_store')) {
-      apcu_store($key, $value, $ttl);
-    }
-  }
-
-  /**
-   * Check if a string matches any regex pattern from a newline-separated list.
-   *
-   * @param string $subject
-   *   The string to check.
-   * @param string $patterns
-   *   A newline-separated string of regex patterns.
-   *
-   * @return bool
-   *   TRUE if any pattern matches, FALSE otherwise.
-   */
-  private function matchesAny(string $subject, string $patterns): bool {
-    foreach (preg_split('/\R+/', $patterns) as $p) {
-      $p = trim($p);
-      if ($p !== '' && @preg_match("~$p~i", '') !== FALSE && preg_match("~$p~i", $subject)) {
-        return TRUE;
-      }
-    }
-    return FALSE;
-  }
 
   /**
    * Deny a request with a custom error response.
@@ -524,7 +454,7 @@ class BotGuardSubscriber implements EventSubscriberInterface {
     ?int $retryAfter = NULL
   ): void {
     // Generate debug token for troubleshooting.
-    $token = $this->generateBlockToken($ip, $ua, $path, $reason, $details);
+    $token = $this->blockTokenService->generateBlockToken($ip, $ua, $path, $reason, $details);
 
     // Add token to message if not already present.
     if (!str_contains($message, '{token}')) {
@@ -628,285 +558,7 @@ class BotGuardSubscriber implements EventSubscriberInterface {
     }
   }
 
-  /**
-   * Perform rate limiting check using APCu.
-   *
-   * @param string $ip
-   *   The client IP address.
-   * @param int $max
-   *   Maximum number of requests allowed.
-   * @param int $window
-   *   The time window in seconds.
-   *
-   * @return bool
-   *   TRUE if the request is within the limit, FALSE otherwise.
-   */
-  private function rateCheck(string $ip, int $max, int $window): bool {
-    $now = time();
-    $key = 'bg_rl_' . sha1($ip);
-    $data = apcu_fetch($key);
-    if (!is_array($data) || $now - $data['t'] > $window) {
-      $data = ['t' => $now, 'c' => 0];
-    }
-    $data['c']++;
-    apcu_store($key, $data, $window);
-    return $data['c'] <= $max;
-  }
 
-  /**
-   * Serve a JavaScript-based cookie challenge with optional proof-of-work.
-   *
-   * @param \Symfony\Component\HttpKernel\Event\RequestEvent $event
-   *   The request event.
-   * @param string $cookieName
-   *   The name of the challenge cookie.
-   * @param int $ttl
-   *   The cookie lifetime in seconds.
-   * @param string $ip
-   *   The client IP address.
-   * @param string $ua
-   *   The client User-Agent string.
-   */
-  private function serveChallenge(RequestEvent $event, string $cookieName, int $ttl, string $ip, string $ua): void {
-    if ($this->usePersistentCache()) {
-      $cached = $this->cacheBackend->get('bg.challenge.count');
-      $count = $cached ? $cached->data : 0;
-      $this->cacheBackend->set('bg.challenge.count', $count + 1);
-    }
-    elseif (function_exists('apcu_fetch')) {
-      $c = apcu_fetch('bg.challenge.count');
-      apcu_store('bg.challenge.count', ($c === FALSE ? 1 : ((int) $c) + 1), 0);
-    }
-
-    $config = $this->configFactory->get('bot_guard.settings');
-    $exp = time() + $ttl;
-    $sig = $this->sign($ip, $ua, $exp);
-
-    // Check if proof-of-work is enabled
-    $powEnabled = (bool) ($config->get('pow_enabled') ?? TRUE);
-    $powDifficulty = (int) ($config->get('pow_difficulty') ?? 5);
-    $powMaxIterations = (int) ($config->get('pow_max_iterations') ?? 10000000);
-    $powTimeout = (int) ($config->get('pow_timeout') ?? 30);
-
-    if ($powEnabled) {
-      // Generate proof-of-work challenge
-      $powChallenge = $this->generatePowChallenge($ip, $ua, $exp);
-
-      // Serve challenge page with proof-of-work
-      $html = $this->buildPowChallengePage(
-        $cookieName,
-        $exp,
-        $sig,
-        $powChallenge,
-        $powDifficulty,
-        $powMaxIterations,
-        $powTimeout
-      );
-    }
-    else {
-      // Serve simple challenge page without proof-of-work
-      $html = '<!doctype html><html><head><meta charset="utf-8">' .
-        '<meta http-equiv="refresh" content="1">' .
-        '<title>Verifying…</title></head><body>' .
-        '<noscript>JavaScript required.</noscript>' .
-        '<script>(function(){try{' .
-        'var exp=' . ($exp * 1000) . ';' .
-        'var d=new Date(exp);' .
-        'var scr=screen.width+"x"+screen.height;' .
-        'var payload=btoa(JSON.stringify({ts:exp,scr:scr}));' .
-        'var sig=' . json_encode($sig) . ';' .
-        'var val=payload+"."+sig;' .
-        'document.cookie=' . json_encode($cookieName) . '+"="+val+";path=/;expires="+d.toUTCString()+";SameSite=Lax";' .
-        'location.reload();}catch(e){}})();</script>' .
-        '</body></html>';
-    }
-
-    $response = new Response($html, 200, [
-      'Content-Type' => 'text/html; charset=utf-8',
-      'Cache-Control' => 'no-cache, no-store, must-revalidate',
-      'Pragma' => 'no-cache',
-    ]);
-
-    $event->setResponse($response);
-  }
-
-  /**
-   * Validate the challenge cookie.
-   *
-   * @param string|null $cookie
-   *   The cookie value from the request.
-   * @param string $ip
-   *   The client IP address.
-   * @param string $ua
-   *   The client User-Agent string.
-   *
-   * @return bool
-   *   TRUE if the cookie is present and valid, FALSE otherwise.
-   */
-  private function hasValidChallengeCookie(?string $cookie, string $ip, string $ua): bool {
-    if (!$cookie) {
-      return FALSE;
-    }
-
-    // New format: payload.signature (JSON payload with ts + scr + optional pow)
-    if (str_contains($cookie, '.')) {
-      $parts = explode('.', $cookie, 2);
-      if (count($parts) !== 2) {
-        return FALSE;
-      }
-      [$payload, $sig] = $parts;
-
-      // Decode payload first to get timestamp
-      $decoded = base64_decode($payload, TRUE);
-      if ($decoded === FALSE) {
-        return FALSE;
-      }
-      $data = json_decode($decoded, TRUE);
-      if (!is_array($data) || !isset($data['ts'])) {
-        return FALSE;
-      }
-
-      // Check expiration (ts is in milliseconds)
-      $exp = (int) ($data['ts'] / 1000);
-      if ($exp < time()) {
-        return FALSE;
-      }
-
-      // Verify signature based on IP, UA, and timestamp (not payload)
-      $expected = $this->sign($ip, $ua, $exp);
-      if (!hash_equals($expected, $sig)) {
-        return FALSE;
-      }
-
-      // Store screen resolution for later use
-      $this->screenResolution = $data['scr'] ?? '';
-
-      // Validate proof-of-work if enabled and present
-      $config = $this->configFactory->get('bot_guard.settings');
-      $powEnabled = (bool) ($config->get('pow_enabled') ?? TRUE);
-      if ($powEnabled && isset($data['pow'])) {
-        $powData = $data['pow'];
-        if (!is_array($powData) || !isset($powData['challenge'], $powData['nonce'], $powData['hash'])) {
-          return FALSE;
-        }
-        if (!$this->validateProofOfWork($powData['challenge'], $powData['nonce'], $powData['hash'], $ip, $ua)) {
-          return FALSE;
-        }
-      }
-      elseif ($powEnabled) {
-        // PoW is enabled but not present in cookie - invalid
-        return FALSE;
-      }
-
-      return TRUE;
-    }
-
-    // Legacy format: exp:signature (for backwards compatibility)
-    if (str_contains($cookie, ':')) {
-      [$exp, $sig] = explode(':', $cookie, 2);
-      if (!ctype_digit($exp)) {
-        return FALSE;
-      }
-      if ((int) $exp < time()) {
-        return FALSE;
-      }
-      // Constant-time compare
-      $expected = $this->sign($ip, $ua, (int) $exp);
-      return hash_equals($expected, $sig);
-    }
-
-    return FALSE;
-  }
-
-  /**
-   * Generate a signature for the challenge cookie.
-   *
-   * @param string $ip
-   *   The client IP address.
-   * @param string $ua
-   *   The client User-Agent string.
-   * @param int $exp
-   *   The expiration timestamp.
-   *
-   * @return string
-   *   A base64-encoded HMAC-SHA256 signature.
-   */
-  private function sign(string $ip, string $ua, int $exp): string {
-    $salt = $this->getHashSalt();
-    return base64_encode(hash_hmac('sha256', $ip . "\n" . $ua . "\n" . $exp, $salt, TRUE));
-  }
-
-  /**
-   * Get the hash salt for signing cookies.
-   *
-   * @return string
-   *   The hash salt.
-   */
-  private function getHashSalt(): string {
-    $salt = (string) \Drupal::service('settings')->get('hash_salt');
-    if ($salt === '') {
-      $salt = Crypt::randomBytesBase64();
-    }
-    return $salt;
-  }
-
-  /**
-   * Create an order-independent fingerprint of facet parameters.
-   *
-   * @param array $facets
-   *   The $_GET['f'] array.
-   *
-   * @return string
-   *   A stable hash representing the combination of facet keys and values.
-   */
-  private function facetFingerprint(array $facets): string {
-    $keys = array_keys($facets);
-    sort($keys);
-
-    $values = [];
-    foreach ($facets as $k => $v) {
-      if (is_array($v)) {
-        $vv = $v;
-        sort($vv);
-        $values[$k] = $vv;
-      }
-      else {
-        $values[$k] = (string) $v;
-      }
-    }
-
-    return sha1(json_encode([$keys, $values]));
-  }
-
-  /**
-   * Get facet parameters from the query string.
-   *
-   * Detects both `f[...]=...` and `1=...` style parameters.
-   *
-   * @param \Symfony\Component\HttpFoundation\Request $request
-   *   The current request.
-   *
-   * @return array
-   *   An array of facet parameters found in the query string.
-   */
-  private function getFacetParams($request): array {
-    $query_params = $request->query->all();
-    $facet_params = [];
-
-    // The `f` parameter is the standard way facets are passed.
-    if (isset($query_params['f']) && is_array($query_params['f'])) {
-      $facet_params = $query_params['f'];
-    }
-
-    // Some bots use numeric keys instead of the `f` parameter.
-    foreach ($query_params as $key => $value) {
-      if (is_numeric($key)) {
-        $facet_params[] = $value;
-      }
-    }
-
-    return $facet_params;
-  }
 
   /**
    * Check if cache is available (Memcache/Redis or APCu fallback).
@@ -936,50 +588,6 @@ class BotGuardSubscriber implements EventSubscriberInterface {
   }
 
   /**
-   * Check if IP is in allowlist.
-   *
-   * @param string $ip
-   *   IP address to check.
-   * @param string $allowlist
-   *   Newline-separated list of IPs/CIDR ranges.
-   *
-   * @return bool
-   *   TRUE if IP is in allowlist.
-   */
-  private function ipInAllowlist(string $ip, string $allowlist): bool {
-    foreach (preg_split('/\R+/', $allowlist) as $entry) {
-      $entry = trim($entry);
-      if ($entry === '') {
-        continue;
-      }
-
-      // Check if entry contains CIDR notation.
-      if (str_contains($entry, '/')) {
-        if ($this->ipInCidr($ip, $entry)) {
-          return TRUE;
-        }
-      }
-      // Exact IP match.
-      elseif ($ip === $entry) {
-        return TRUE;
-      }
-    }
-
-    return FALSE;
-  }
-
-  /**
-   * Check if IP is in CIDR range.
-   *
-   * @param string $ip
-   *   IP address to check.
-   * @param string $cidr
-   *   CIDR notation (e.g., 192.168.0.0/16).
-   *
-   * @return bool
-   *   TRUE if IP is in CIDR range.
-   */
-  /**
    * Increment the allowed requests counter in the cache.
    */
   private function incrementAllowedCounter(): void {
@@ -994,158 +602,6 @@ class BotGuardSubscriber implements EventSubscriberInterface {
     }
   }
 
-  /**
-   * Check for suspicious screen resolution / user agent combinations.
-   *
-   * This method focuses on detecting obviously fake resolutions and headless
-   * browsers, while being permissive enough to allow legitimate devices.
-   *
-   * Known limitations:
-   * - iPads with Safari report as "Macintosh" (desktop UA) with tablet
-   * resolutions
-   * - Modern tablets can have various resolutions overlapping with small
-   * laptops
-   *
-   * @param string $ua
-   *   The client User-Agent string.
-   * @param string $resolution
-   *   The client screen resolution (e.g., "1920x1080").
-   *
-   * @return bool
-   *   TRUE if the combination is suspicious, FALSE otherwise.
-   */
-  private function isSuspiciousScreenResolution(string $ua, string $resolution): bool {
-    // An empty resolution is highly suspicious, as it indicates that the JS
-    // challenge was likely not executed. This is a strong signal for a bot.
-    if (empty($resolution) || !str_contains($resolution, 'x')) {
-      return TRUE;
-    }
-
-    [$width, $height] = explode('x', $resolution, 2);
-    $width = (int) $width;
-    $height = (int) $height;
-
-    // Invalid or zero resolutions are also a strong indicator of a non-browser client.
-    if ($width <= 100 || $height <= 100) {
-      return TRUE;
-    }
-
-    // Common headless browser and automation tool resolutions that are suspicious.
-    // These are default values commonly used by Puppeteer, Selenium, etc.
-    $headlessResolutions = [
-      '800x600',   // Common Puppeteer/Selenium default
-      '1280x720',  // Another common automation default
-      '1280x800',  // Headless Chrome default on some systems
-    ];
-    if (in_array($resolution, $headlessResolutions, TRUE)) {
-      // Additional check: if it's a headless resolution but has webkit/safari,
-      // it might be a real device (like an old iPad). Be more lenient.
-      if (!preg_match('/WebKit|Safari/i', $ua)) {
-        return TRUE;
-      }
-    }
-
-    // Distinguish between device types based on User-Agent.
-    // Note: iPads with Safari report as "Macintosh" (desktop UA), so we can't
-    // reliably detect them here. We need to be permissive with tablet-sized resolutions.
-    $isPhone = preg_match('/(Mobi|Android.*Mobi|iPhone|iPod)/i', $ua);
-    $isTablet = preg_match('/(iPad|Tablet|Android(?!.*Mobi))/i', $ua);
-
-    // --- Define suspicious scenarios ---
-
-    // 1. Phone UA with desktop/tablet resolution.
-    // Modern phones rarely exceed 430px logical width (even with high DPI).
-    // iPhone 15 Pro Max = 430x932, Samsung S24 Ultra = 412x915.
-    if ($isPhone && $width > 600) {
-      return TRUE;
-    }
-
-    // 2. Tablet UA with phone resolution.
-    // Tablets are typically 600px+ width. iPads start at 768px.
-    if ($isTablet && $width < 600) {
-      return TRUE;
-    }
-
-    // 3. Very unusual resolutions that don't match any real device.
-    // Excessively narrow (< 320px) or extremely wide (> 4000px) are suspicious.
-    if ($width < 320 || $width > 4000 || $height < 320 || $height > 4000) {
-      return TRUE;
-    }
-
-    // 4. Aspect ratios that don't exist in the real world.
-    // Most screens have aspect ratios between 4:3 (1.33) and 21:9 (2.33).
-    $aspectRatio = max($width, $height) / min($width, $height);
-    if ($aspectRatio > 3.0 || $aspectRatio < 1.0) {
-      return TRUE;
-    }
-
-    // All other combinations are considered valid.
-    // This includes:
-    // - iPads with Safari (Macintosh UA + 768x1024 or similar)
-    // - Small laptops (1366x768, 1280x720)
-    // - Large monitors (3840x2160, 2560x1440)
-    // - Modern tablets with various resolutions
-    return FALSE;
-  }
-
-  private function ipInCidr(string $ip, string $cidr): bool {
-    [$subnet, $mask] = explode('/', $cidr);
-
-    // Convert IP and subnet to long integers.
-    $ip_long = ip2long($ip);
-    $subnet_long = ip2long($subnet);
-
-    if ($ip_long === FALSE || $subnet_long === FALSE) {
-      return FALSE;
-    }
-
-    // Calculate network mask.
-    $mask_long = -1 << (32 - (int) $mask);
-
-    // Check if IP is in subnet.
-    return ($ip_long & $mask_long) === ($subnet_long & $mask_long);
-  }
-
-  /**
-   * Generate an encoded block token for debugging.
-   *
-   * Creates a compact token containing block information that can be decoded
-   * in the dashboard for troubleshooting false positives.
-   *
-   * Format: BG + CRC32(3 chars) + base64url(gzcompress(json({...})))
-   * Uses gzip compression and URL-safe base64 to minimize token length.
-   * The token is not cryptographically signed - it's just for debugging.
-   * Contains full IP address and User-Agent for admin troubleshooting.
-   *
-   * @param string $ip
-   *   The client IP address.
-   * @param string $ua
-   *   The client User-Agent string.
-   * @param string $path
-   *   The request path.
-   * @param string $reason
-   *   The block reason.
-   * @param array $details
-   *   Additional details (resolution, cookie info, etc.).
-   *
-   * @return string
-   *   The encoded block token (typically 40-60% smaller than uncompressed).
-   */
-  private function generateBlockToken(string $ip, string $ua, string $path, string $reason, array $details): string {
-    // Pack data efficiently: reason|ip|ua|path|timestamp|details
-    // Use pipe separator for easy parsing
-    $detailsJson = empty($details) ? '' : json_encode($details, JSON_UNESCAPED_SLASHES);
-    $data = implode('|', [$reason, $ip, $ua, $path, time(), $detailsJson]);
-
-    // Compress with gzcompress (level 9 = maximum compression)
-    $compressed = gzcompress($data, 9);
-
-    // Base64 encode (URL-safe variant, no padding)
-    $token = rtrim(strtr(base64_encode($compressed), '+/', '-_'), '=');
-
-    // Add prefix (no checksum to save 3 chars)
-    return 'BG' . $token;
-  }
 
   /**
    * Decode a block token for debugging.
@@ -1157,304 +613,9 @@ class BotGuardSubscriber implements EventSubscriberInterface {
    *   The decoded token data, or NULL if invalid.
    */
   public static function decodeBlockToken(string $token): ?array {
-    // Remove prefix (BG)
-    if (!str_starts_with($token, 'BG') || strlen($token) < 4) {
-      return NULL;
-    }
-
-    $encodedData = substr($token, 2);
-
-    // Restore padding if needed
-    $padding = strlen($encodedData) % 4;
-    if ($padding > 0) {
-      $encodedData .= str_repeat('=', 4 - $padding);
-    }
-
-    // Convert URL-safe base64 back to standard base64
-    $encodedData = strtr($encodedData, '-_', '+/');
-
-    // Base64 decode
-    $compressed = base64_decode($encodedData, TRUE);
-    if ($compressed === FALSE) {
-      return NULL;
-    }
-
-    // Decompress
-    $data = @gzuncompress($compressed);
-    if ($data === FALSE) {
-      return NULL;
-    }
-
-    // Parse pipe-separated values: reason|ip|ua|path|timestamp|details
-    $parts = explode('|', $data, 6);
-    if (count($parts) < 5) {
-      return NULL;
-    }
-
-    return [
-      'r' => $parts[0],
-      'i' => $parts[1],
-      'u' => $parts[2],
-      'p' => $parts[3],
-      't' => (int) $parts[4],
-      'd' => isset($parts[5]) && $parts[5] !== '' ? json_decode($parts[5], TRUE) : [],
-    ];
-  }
-
-  /**
-   * Build the HTML page for proof-of-work challenge.
-   *
-   * @param string $cookieName
-   *   The name of the challenge cookie.
-   * @param int $exp
-   *   The expiration timestamp.
-   * @param string $sig
-   *   The signature for the cookie.
-   * @param string $challenge
-   *   The proof-of-work challenge string.
-   * @param int $difficulty
-   *   The number of leading zeros required.
-   * @param int $maxIterations
-   *   Maximum number of iterations.
-   * @param int $timeout
-   *   Timeout in seconds.
-   *
-   * @return string
-   *   The HTML page content.
-   */
-  private function buildPowChallengePage(string $cookieName, int $exp, string $sig, string $challenge, int $difficulty, int $maxIterations, int $timeout): string {
-    $expMs = $exp * 1000;
-
-    // Inline Web Worker code for proof-of-work computation
-    $workerCode = <<<'WORKER'
-self.onmessage = async function(e) {
-  const { challenge, difficulty, maxIterations } = e.data;
-  const target = '0'.repeat(difficulty);
-
-  // Use SubtleCrypto for SHA-256 hashing
-  async function sha256(str) {
-    const encoder = new TextEncoder();
-    const data = encoder.encode(str);
-    const hashBuffer = await crypto.subtle.digest('SHA-256', data);
-    const hashArray = Array.from(new Uint8Array(hashBuffer));
-    return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
-  }
-
-  let nonce = 0;
-  let hash = '';
-
-  try {
-    while (nonce < maxIterations) {
-      hash = await sha256(challenge + nonce);
-
-      if (hash.startsWith(target)) {
-        self.postMessage({ success: true, nonce, hash });
-        return;
-      }
-
-      nonce++;
-
-      // Report progress every 10000 iterations
-      if (nonce % 10000 === 0) {
-        self.postMessage({ progress: nonce });
-      }
-    }
-
-    self.postMessage({ success: false, error: 'Max iterations reached' });
-  } catch (error) {
-    self.postMessage({ success: false, error: error.message });
-  }
-};
-WORKER;
-
-    $workerBlob = base64_encode($workerCode);
-
-    // Properly escape values for JavaScript
-    $challengeJson = json_encode($challenge);
-    $sigJson = json_encode($sig);
-    $cookieNameJson = json_encode($cookieName);
-
-    $html = '<!doctype html><html><head><meta charset="utf-8">' .
-      '<meta name="viewport" content="width=device-width, initial-scale=1">' .
-      '<title>Verifying Your Browser…</title><style>' .
-      'body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;background:#f5f5f5}' .
-      '.container{text-align:center;padding:2rem;background:white;border-radius:8px;box-shadow:0 2px 10px rgba(0,0,0,0.1);max-width:400px}' .
-      '.spinner{border:3px solid #f3f3f3;border-top:3px solid #3498db;border-radius:50%;width:40px;height:40px;animation:spin 1s linear infinite;margin:0 auto 1rem}' .
-      '@keyframes spin{0%{transform:rotate(0deg)}100%{transform:rotate(360deg)}}' .
-      '.progress{margin-top:1rem;font-size:0.9rem;color:#666}' .
-      '.error{color:#e74c3c;margin-top:1rem}' .
-      'noscript{display:block;padding:1rem;background:#fff3cd;border:1px solid #ffc107;border-radius:4px}' .
-      '</style></head><body>' .
-      '<div class="container"><div class="spinner"></div>' .
-      '<h2>Verifying Your Browser</h2>' .
-      '<p>Please wait while we verify your browser...</p>' .
-      '<div class="progress" id="progress"></div>' .
-      '<div class="error" id="error"></div></div>' .
-      '<noscript><div class="container"><h2>JavaScript Required</h2>' .
-      '<p>Please enable JavaScript to continue.</p></div></noscript>' .
-      '<script>(async function(){' .
-      'const challenge=' . $challengeJson . ';' .
-      'const difficulty=' . $difficulty . ';' .
-      'const maxIterations=' . $maxIterations . ';' .
-      'const timeout=' . $timeout . ';' .
-      'const exp=' . $expMs . ';' .
-      'const sig=' . $sigJson . ';' .
-      'const cookieName=' . $cookieNameJson . ';' .
-      'const progressEl=document.getElementById("progress");' .
-      'const errorEl=document.getElementById("error");' .
-      'try{' .
-      'const workerBlob=atob("' . $workerBlob . '");' .
-      'const blob=new Blob([workerBlob],{type:"application/javascript"});' .
-      'const workerUrl=URL.createObjectURL(blob);' .
-      'const worker=new Worker(workerUrl);' .
-      'const timeoutId=setTimeout(()=>{worker.terminate();errorEl.textContent="Challenge timeout. Please refresh to try again.";},timeout*1000);' .
-      'worker.onmessage=function(e){' .
-      'if(e.data.progress){progressEl.textContent="Computing: "+e.data.progress.toLocaleString()+" attempts...";}' .
-      'else if(e.data.success){clearTimeout(timeoutId);worker.terminate();URL.revokeObjectURL(workerUrl);' .
-      'const scr=screen.width+"x"+screen.height;' .
-      'const payload=btoa(JSON.stringify({ts:exp,scr:scr,pow:{challenge:challenge,nonce:e.data.nonce,hash:e.data.hash}}));' .
-      'const d=new Date(exp);const val=payload+"."+sig;' .
-      'document.cookie=cookieName+"="+val+";path=/;expires="+d.toUTCString()+";SameSite=Lax";' .
-      'progressEl.textContent="Verification complete! Redirecting...";setTimeout(()=>location.reload(),500);}' .
-      'else{clearTimeout(timeoutId);worker.terminate();URL.revokeObjectURL(workerUrl);' .
-      'errorEl.textContent="Challenge failed: "+(e.data.error||"Unknown error");}};' .
-      'worker.onerror=function(error){clearTimeout(timeoutId);worker.terminate();URL.revokeObjectURL(workerUrl);' .
-      'errorEl.textContent="Worker error: "+error.message;};' .
-      'worker.postMessage({challenge,difficulty,maxIterations});}' .
-      'catch(error){errorEl.textContent="Error: "+error.message;}})();</script>' .
-      '</body></html>';
-
-    return $html;
-  }
-
-  /**
-   * Generate a proof-of-work challenge string.
-   *
-   * @param string $ip
-   *   The client IP address.
-   * @param string $ua
-   *   The client User-Agent string.
-   * @param int $timestamp
-   *   The current timestamp.
-   *
-   * @return string
-   *   A unique challenge string based on request metadata.
-   */
-  private function generatePowChallenge(string $ip, string $ua, int $timestamp): string {
-    $salt = $this->getHashSalt();
-    // Create a challenge from IP, UA, timestamp, and salt
-    return hash('sha256', $ip . "\n" . $ua . "\n" . $timestamp . "\n" . $salt);
-  }
-
-  /**
-   * Validate a proof-of-work solution.
-   *
-   * @param string $challenge
-   *   The challenge string.
-   * @param int $nonce
-   *   The nonce (iteration number) used to solve the challenge.
-   * @param string $hash
-   *   The resulting hash that should have the required leading zeros.
-   * @param string $ip
-   *   The client IP address.
-   * @param string $ua
-   *   The client User-Agent string.
-   *
-   * @return bool
-   *   TRUE if the proof-of-work is valid, FALSE otherwise.
-   */
-  private function validateProofOfWork(string $challenge, int $nonce, string $hash, string $ip, string $ua): bool {
-    $config = $this->configFactory->get('bot_guard.settings');
-    $difficulty = (int) ($config->get('pow_difficulty') ?? 5);
-
-    // Verify the hash matches the challenge + nonce
-    $expectedHash = hash('sha256', $challenge . $nonce);
-    if (!hash_equals($expectedHash, $hash)) {
-      return FALSE;
-    }
-
-    // Verify the hash has the required number of leading zeros
-    $requiredPrefix = str_repeat('0', $difficulty);
-    if (!str_starts_with($hash, $requiredPrefix)) {
-      return FALSE;
-    }
-
-    // Additional validation: Verify the challenge was generated for this IP/UA
-    // We can't fully verify this without storing challenges, but we can check
-    // that the challenge format is valid (64 hex chars for SHA-256)
-    if (!preg_match('/^[0-9a-f]{64}$/i', $challenge)) {
-      return FALSE;
-    }
-
-    return TRUE;
-  }
-
-  /**
-   * Get the trusted client IP address from request.
-   *
-   * Handles various reverse proxy scenarios (Traefik, Nginx, Cloudflare, etc.).
-   * Checks multiple headers in order of preference and validates against
-   * trusted proxy ranges.
-   *
-   * @param \Symfony\Component\HttpFoundation\Request $request
-   *   The current request.
-   * @param \Drupal\Core\Config\ImmutableConfig $config
-   *   The module configuration.
-   *
-   * @return string
-   *   The client IP address.
-   */
-  private function getTrustedClientIp($request, $config): string {
-    // Get the immediate client IP (might be proxy).
-    $immediateIp = $request->getClientIp() ?? '0.0.0.0';
-
-    // Get trusted proxy IPs/ranges from config.
-    $trustedProxies = (string) $config->get('trusted_proxies');
-
-    // If no trusted proxies configured, use immediate IP.
-    if (empty($trustedProxies)) {
-      return $immediateIp;
-    }
-
-    // Check if immediate IP is a trusted proxy.
-    $isTrustedProxy = $this->ipInAllowlist($immediateIp, $trustedProxies);
-
-    // If not from trusted proxy, return immediate IP.
-    if (!$isTrustedProxy) {
-      return $immediateIp;
-    }
-
-    // Priority order of headers to check (most reliable first).
-    $headers = [
-      'HTTP_CF_CONNECTING_IP',     // Cloudflare
-      'HTTP_X_REAL_IP',            // Nginx, Traefik
-      'HTTP_X_FORWARDED_FOR',      // Standard proxy header
-      'HTTP_X_FORWARDED',          // Alternative
-      'HTTP_FORWARDED_FOR',        // RFC 7239
-      'HTTP_FORWARDED',            // RFC 7239
-      'HTTP_CLIENT_IP',            // Some proxies
-    ];
-
-    foreach ($headers as $header) {
-      if (!empty($_SERVER[$header])) {
-        $ip = $_SERVER[$header];
-
-        // X-Forwarded-For can contain multiple IPs (client, proxy1, proxy2).
-        // Take the first (leftmost) IP as it's the original client.
-        if (str_contains($ip, ',')) {
-          $ips = array_map('trim', explode(',', $ip));
-          $ip = $ips[0];
-        }
-
-        // Validate IP format.
-        if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE)) {
-          return $ip;
-        }
-      }
-    }
-
-    // Fallback to immediate IP if no valid header found.
-    return $immediateIp;
+    // Delegate to service
+    $service = \Drupal::service('bot_guard.block_token');
+    return $service->decodeBlockToken($token);
   }
 
 }

@@ -6,6 +6,28 @@ services:
       - '@datetime.time'
       - '@module_handler'
 
+  bot_guard.challenge:
+    class: Drupal\bot_guard\Service\BotGuardChallengeService
+    arguments:
+      - '@config.factory'
+      - '@cache.default'
+      - '@module_handler'
+
+  bot_guard.facet:
+    class: Drupal\bot_guard\Service\BotGuardFacetService
+    arguments:
+      - '@config.factory'
+      - '@cache.default'
+
+  bot_guard.ip_helper:
+    class: Drupal\bot_guard\Service\BotGuardIpHelper
+
+  bot_guard.detection_helper:
+    class: Drupal\bot_guard\Service\BotGuardDetectionHelper
+
+  bot_guard.block_token:
+    class: Drupal\bot_guard\Service\BotGuardBlockTokenService
+
   bot_guard.subscriber:
     class: Drupal\bot_guard\EventSubscriber\BotGuardSubscriber
     arguments:
@@ -15,5 +37,10 @@ services:
       - '@cache.default'
       - '@datetime.time'
       - '@bot_guard.metrics'
+      - '@bot_guard.challenge'
+      - '@bot_guard.facet'
+      - '@bot_guard.ip_helper'
+      - '@bot_guard.detection_helper'
+      - '@bot_guard.block_token'
     tags:
       - { name: event_subscriber }
