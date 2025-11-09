@@ -163,7 +163,6 @@ class BotGuardSubscriber implements EventSubscriberInterface {
     $path = $request->getPathInfo();
     $ip = $this->getTrustedClientIp($request, $config);
     $method = $request->getMethod();
-    $this->screenResolution = $request->cookies->get('bg_scr', '');
 
     // IP Allow-list (bypass all checks).
     $allowIps = (string) $config->get('allow_ips');
@@ -235,10 +234,11 @@ class BotGuardSubscriber implements EventSubscriberInterface {
 
     // Cookie challenge.
     $challengeEnabled = (bool) ($config->get('challenge_enabled') ?? TRUE);
-    if ($challengeEnabled) {
-      $cookieName = (string) ($config->get('cookie_name') ?? 'bg_chal');
-      $cookieTtl = (int) ($config->get('cookie_ttl') ?? 86400);
+    $cookieName = (string) ($config->get('cookie_name') ?? 'bg_chal');
+    $cookieTtl = (int) ($config->get('cookie_ttl') ?? 86400);
+    $hasValidChallengeCookie = FALSE;
 
+    if ($challengeEnabled) {
       // If no valid challenge cookie is present, take action.
       if (!$this->hasValidChallengeCookie($request->cookies->get($cookieName), $ip, $ua)) {
         // For GET/HEAD requests, serve the JS challenge to the browser.
@@ -254,15 +254,19 @@ class BotGuardSubscriber implements EventSubscriberInterface {
         return;
       }
       // If a valid cookie exists, the request proceeds.
+      $hasValidChallengeCookie = TRUE;
     }
 
     // Suspicious screen resolution.
-    // Only check if challenge is enabled and a valid cookie exists (JS was executed).
+    // Only check if a valid challenge cookie exists (which contains screen resolution).
+    // The resolution is automatically extracted from the cookie in hasValidChallengeCookie().
     $resolutionCheckEnabled = (bool) ($config->get('resolution_check_enabled') ?? TRUE);
-    if ($challengeEnabled && $resolutionCheckEnabled && $this->isSuspiciousScreenResolution($ua, $this->screenResolution)) {
-      $this->storeDecision($cacheEnabled, $cacheKey, self::BLOCK, $cacheTtl);
-      $this->deny($event, $config, $ip, $ua, $path, 'suspicious-resolution');
-      return;
+    if ($hasValidChallengeCookie && $resolutionCheckEnabled && !empty($this->screenResolution)) {
+      if ($this->isSuspiciousScreenResolution($ua, $this->screenResolution)) {
+        $this->storeDecision($cacheEnabled, $cacheKey, self::BLOCK, $cacheTtl);
+        $this->deny($event, $config, $ip, $ua, $path, 'suspicious-resolution');
+        return;
+      }
     }
 
     // Facet Bot Blocking.
@@ -610,8 +614,8 @@ class BotGuardSubscriber implements EventSubscriberInterface {
     }
 
     $exp = time() + $ttl;
+    // Generate signature based on IP, UA, and timestamp
     $sig = $this->sign($ip, $ua, $exp);
-    $val = $exp . ':' . $sig;
 
     // Minimal HTML/JS (no assets, ~0.8 KB). Also meta refresh for no-JS.
     $html = '<!doctype html><html><head><meta charset="utf-8">' .
@@ -619,16 +623,18 @@ class BotGuardSubscriber implements EventSubscriberInterface {
       '<title>Verifying…</title></head><body>' .
       '<noscript>JavaScript required.</noscript>' .
       '<script>(function(){try{' .
-      'var d=new Date(' . ($exp * 1000) . ');' .
-      'var res=screen.width+"x"+screen.height;document.cookie="bg_scr="+res+";path=/;expires="+d.toUTCString()+";SameSite=Lax";' .
-      'document.cookie=' . json_encode($cookieName) . '+\'=' . $val . ';path=/;expires=\'+d.toUTCString()+' .
-      '\';SameSite=Lax\';location.reload();}catch(e){}})();</script>' .
+      'var exp=' . ($exp * 1000) . ';' .
+      'var d=new Date(exp);' .
+      'var scr=screen.width+"x"+screen.height;' .
+      'var payload=btoa(JSON.stringify({ts:exp,scr:scr}));' .
+      'var sig=' . json_encode($sig) . ';' .
+      'var val=payload+"."+sig;' .
+      'document.cookie=' . json_encode($cookieName) . '+"="+val+";path=/;expires="+d.toUTCString()+";SameSite=Lax";' .
+      'location.reload();}catch(e){}})();</script>' .
       '</body></html>';
 
     $response = new Response($html, 200, [
       'Content-Type' => 'text/html; charset=utf-8',
-      // Also set cookie via header for first-party contexts:
-      'Set-Cookie' => $cookieName . '=' . $val . '; Path=/; Expires=' . gmdate('D, d M Y H:i:s', $exp) . ' GMT; SameSite=Lax',
       'Cache-Control' => 'no-cache, no-store, must-revalidate',
       'Pragma' => 'no-cache',
     ]);
@@ -650,19 +656,61 @@ class BotGuardSubscriber implements EventSubscriberInterface {
    *   TRUE if the cookie is present and valid, FALSE otherwise.
    */
   private function hasValidChallengeCookie(?string $cookie, string $ip, string $ua): bool {
-    if (!$cookie || !str_contains($cookie, ':')) {
+    if (!$cookie) {
       return FALSE;
     }
-    [$exp, $sig] = explode(':', $cookie, 2);
-    if (!ctype_digit($exp)) {
-      return FALSE;
+
+    // New format: payload.signature (JSON payload with ts + scr)
+    if (str_contains($cookie, '.')) {
+      $parts = explode('.', $cookie, 2);
+      if (count($parts) !== 2) {
+        return FALSE;
+      }
+      [$payload, $sig] = $parts;
+
+      // Decode payload first to get timestamp
+      $decoded = base64_decode($payload, TRUE);
+      if ($decoded === FALSE) {
+        return FALSE;
+      }
+      $data = json_decode($decoded, TRUE);
+      if (!is_array($data) || !isset($data['ts'])) {
+        return FALSE;
+      }
+
+      // Check expiration (ts is in milliseconds)
+      $exp = (int) ($data['ts'] / 1000);
+      if ($exp < time()) {
+        return FALSE;
+      }
+
+      // Verify signature based on IP, UA, and timestamp (not payload)
+      $expected = $this->sign($ip, $ua, $exp);
+      if (!hash_equals($expected, $sig)) {
+        return FALSE;
+      }
+
+      // Store screen resolution for later use
+      $this->screenResolution = $data['scr'] ?? '';
+
+      return TRUE;
     }
-    if ((int) $exp < time()) {
-      return FALSE;
+
+    // Legacy format: exp:signature (for backwards compatibility)
+    if (str_contains($cookie, ':')) {
+      [$exp, $sig] = explode(':', $cookie, 2);
+      if (!ctype_digit($exp)) {
+        return FALSE;
+      }
+      if ((int) $exp < time()) {
+        return FALSE;
+      }
+      // Constant-time compare
+      $expected = $this->sign($ip, $ua, (int) $exp);
+      return hash_equals($expected, $sig);
     }
-    // Constant-time compare
-    $expected = $this->sign($ip, $ua, (int) $exp);
-    return hash_equals($expected, $sig);
+
+    return FALSE;
   }
 
   /**
@@ -679,12 +727,22 @@ class BotGuardSubscriber implements EventSubscriberInterface {
    *   A base64-encoded HMAC-SHA256 signature.
    */
   private function sign(string $ip, string $ua, int $exp): string {
-    // Use Drupal hash salt; fallback to Crypt::randomBytesBase64().
+    $salt = $this->getHashSalt();
+    return base64_encode(hash_hmac('sha256', $ip . "\n" . $ua . "\n" . $exp, $salt, TRUE));
+  }
+
+  /**
+   * Get the hash salt for signing cookies.
+   *
+   * @return string
+   *   The hash salt.
+   */
+  private function getHashSalt(): string {
     $salt = (string) \Drupal::service('settings')->get('hash_salt');
     if ($salt === '') {
       $salt = Crypt::randomBytesBase64();
     }
-    return base64_encode(hash_hmac('sha256', $ip . "\n" . $ua . "\n" . $exp, $salt, TRUE));
+    return $salt;
   }
 
   /**
