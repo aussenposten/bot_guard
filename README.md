@@ -41,7 +41,7 @@ This multi-factor validation ensures that only genuine browsers with JavaScript 
 - **Heuristic Analysis:** Blocks requests with suspicious characteristics common to low-quality bots.
 - **JavaScript Cookie Challenge:** A stateless, signed cookie challenge effectively filters out bots that don't execute JavaScript.
 - **Proof-of-Work Challenge:** Anubis-style SHA-256 proof-of-work system that requires clients to solve computational puzzles, making automated scraping prohibitively expensive while having minimal impact on legitimate users.
-- **Screen Resolution Check:** Validates that screen resolutions match the reported User-Agent (e.g., desktop UA should have desktop resolution), catching headless browsers and spoofed clients.
+- **Screen Resolution Check:** Detects headless browsers and automation tools by identifying obviously fake resolutions, impossible aspect ratios, and common automation defaults (800x600, 1280x720).
 - **Facet Protection:** Prevents denial-of-service attacks via excessive facet parameter combinations.
 - **Statistics Dashboard:** A real-time dashboard to monitor traffic and analyze block reasons.
 
@@ -101,10 +101,13 @@ All features are configurable at **Administration > Configuration > System > Bot
 **Note:** The proof-of-work challenge runs in a Web Worker, so it doesn't block the browser UI. See `PROOF_OF_WORK.md` for detailed documentation.
 
 #### Screen Resolution Check
-- **Enable screen resolution check:** Validates that screen resolution matches User-Agent
-  - Blocks desktop UAs with mobile resolutions
-  - Blocks mobile UAs with desktop resolutions
-  - Catches headless browsers with suspicious resolutions (e.g., 800x600)
+- **Enable screen resolution check:** Detects obviously fake resolutions and headless browsers
+  - Blocks extremely unusual resolutions (< 320px or > 4000px)
+  - Blocks impossible aspect ratios (> 3.0)
+  - Catches headless browser defaults (800x600, 1280x720)
+  - Detects phone UAs with desktop resolutions
+  
+**Note:** iPads with Safari report as "Macintosh" (desktop) in their User-Agent, so the check is permissive with tablet-sized resolutions to avoid false positives. The focus is on catching automation tools rather than precise device type validation.
 
 #### Rate Limiting
 - **Rate limit hits:** Maximum requests per time window (default: 20)
@@ -157,10 +160,16 @@ The dashboard tracks various block reasons:
 
 ### Screen Resolution Check
 
-The screen resolution check is highly effective at catching:
-- **Headless browsers** (Puppeteer, Selenium) with default resolutions
-- **Spoofed User-Agents** (mobile UA with desktop resolution)
-- **Automated tools** that don't properly emulate device characteristics
+The screen resolution check is effective at catching:
+- **Headless browsers** (Puppeteer, Selenium) with default resolutions (800x600, 1280x720)
+- **Phone UAs with desktop resolutions** (spoofed or misconfigured)
+- **Extremely unusual resolutions** that don't exist in real devices (< 320px, > 4000px)
+- **Impossible aspect ratios** (too narrow or too wide)
+
+**Limitations:**
+- iPads with Safari report as "Macintosh" (desktop UA), so they're not distinguishable from small laptops
+- The check is intentionally permissive to avoid false positives
+- Focus is on catching obvious automation tools, not precise device type validation
 
 ### Allow-lists
 

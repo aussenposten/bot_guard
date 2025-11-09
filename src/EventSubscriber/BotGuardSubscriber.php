@@ -952,6 +952,13 @@ class BotGuardSubscriber implements EventSubscriberInterface {
   /**
    * Check for suspicious screen resolution / user agent combinations.
    *
+   * This method focuses on detecting obviously fake resolutions and headless
+   * browsers, while being permissive enough to allow legitimate devices.
+   *
+   * Known limitations:
+   * - iPads with Safari report as "Macintosh" (desktop UA) with tablet resolutions
+   * - Modern tablets can have various resolutions overlapping with small laptops
+   *
    * @param string $ua
    *   The client User-Agent string.
    * @param string $resolution
@@ -976,30 +983,61 @@ class BotGuardSubscriber implements EventSubscriberInterface {
       return TRUE;
     }
 
+    // Common headless browser and automation tool resolutions that are suspicious.
+    // These are default values commonly used by Puppeteer, Selenium, etc.
+    $headlessResolutions = [
+      '800x600',   // Common Puppeteer/Selenium default
+      '1280x720',  // Another common automation default
+      '1280x800',  // Headless Chrome default on some systems
+    ];
+    if (in_array($resolution, $headlessResolutions, TRUE)) {
+      // Additional check: if it's a headless resolution but has webkit/safari,
+      // it might be a real device (like an old iPad). Be more lenient.
+      if (!preg_match('/WebKit|Safari/i', $ua)) {
+        return TRUE;
+      }
+    }
+
     // Distinguish between device types based on User-Agent.
-    $isTablet = preg_match('/(iPad|Tablet|Android(?!.*Mobi))/i', $ua);
+    // Note: iPads with Safari report as "Macintosh" (desktop UA), so we can't
+    // reliably detect them here. We need to be permissive with tablet-sized resolutions.
     $isPhone = preg_match('/(Mobi|Android.*Mobi|iPhone|iPod)/i', $ua);
-    $isDesktop = !$isTablet && !$isPhone;
+    $isTablet = preg_match('/(iPad|Tablet|Android(?!.*Mobi))/i', $ua);
 
     // --- Define suspicious scenarios ---
 
-    // 1. Desktop UA with a very small, phone-like resolution.
-    if ($isDesktop && ($width < 1024 || $height < 768)) {
+    // 1. Phone UA with desktop/tablet resolution.
+    // Modern phones rarely exceed 430px logical width (even with high DPI).
+    // iPhone 15 Pro Max = 430x932, Samsung S24 Ultra = 412x915.
+    if ($isPhone && $width > 600) {
       return TRUE;
     }
 
-    // 2. Phone UA with a very large, desktop-like resolution.
-    // Modern phones have high pixel density, but their logical width in JS is usually < 980px.
-    if ($isPhone && $width > 980) {
+    // 2. Tablet UA with phone resolution.
+    // Tablets are typically 600px+ width. iPads start at 768px.
+    if ($isTablet && $width < 600) {
       return TRUE;
     }
 
-    // 3. Tablet UA with an unlikely resolution (either too small or excessively large).
-    if ($isTablet && (($width < 768 && $height < 1024) || $width > 2048)) {
+    // 3. Very unusual resolutions that don't match any real device.
+    // Excessively narrow (< 320px) or extremely wide (> 4000px) are suspicious.
+    if ($width < 320 || $width > 4000 || $height < 320 || $height > 4000) {
+      return TRUE;
+    }
+
+    // 4. Aspect ratios that don't exist in the real world.
+    // Most screens have aspect ratios between 4:3 (1.33) and 21:9 (2.33).
+    $aspectRatio = max($width, $height) / min($width, $height);
+    if ($aspectRatio > 3.0 || $aspectRatio < 1.0) {
       return TRUE;
     }
 
     // All other combinations are considered valid.
+    // This includes:
+    // - iPads with Safari (Macintosh UA + 768x1024 or similar)
+    // - Small laptops (1366x768, 1280x720)
+    // - Large monitors (3840x2160, 2560x1440)
+    // - Modern tablets with various resolutions
     return FALSE;
   }
 
