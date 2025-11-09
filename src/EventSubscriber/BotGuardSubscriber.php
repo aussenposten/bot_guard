@@ -127,7 +127,7 @@ class BotGuardSubscriber implements EventSubscriberInterface {
   public static function getSubscribedEvents(): array {
     // Very early.
     return [
-      KernelEvents::REQUEST => ['onRequest', 999],
+      KernelEvents::REQUEST => ['onRequest', 299],
     ];
   }
 
