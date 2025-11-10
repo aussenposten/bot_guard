@@ -392,7 +392,7 @@ class BotGuardSubscriber implements EventSubscriberInterface {
   private function deny(RequestEvent $event, $config, string $ip, string $ua, string $path, string $reason, array $details = []): void {
     $this->log($ip, $ua, $path, $reason, $details);
 
-    $statusCode = (int) ($config->get('block_status_code') ?? 404);
+    $statusCode = (int) ($config->get('block_status_code') ?? 200);
     $message = (string) ($config->get('block_message') ?? '<h1>Access Denied</h1><p>Your request was blocked.</p>');
 
     $this->buildDenyResponse($event, $ip, $ua, $path, $reason, $details, $statusCode, $message);
