@@ -142,12 +142,13 @@ class SettingsForm extends ConfigFormBase {
       '#type' => 'select',
       '#title' => 'Default block status code',
       '#options' => [
+        '200' => '200 OK',
         '403' => '403 Forbidden',
         '404' => '404 Not Found',
         '410' => '410 Gone',
         '429' => '429 Too Many Requests',
       ],
-      '#default_value' => $config->get('block_status_code') ?? '404',
+      '#default_value' => $config->get('block_status_code') ?? '200',
       '#description' => 'HTTP status code for blocked requests (UA blocks, language gate, etc.).',
     ];
     $form['error_responses']['block_message'] = [
@@ -161,6 +162,7 @@ class SettingsForm extends ConfigFormBase {
       '#type' => 'select',
       '#title' => 'Rate limit status code',
       '#options' => [
+        '200' => '200 OK',
         '403' => '403 Forbidden',
         '429' => '429 Too Many Requests',
         '503' => '503 Service Unavailable',

@@ -55,7 +55,7 @@ rate_limit: 20
 rate_window: 10
 
 # Error responses
-block_status_code: '404'
+block_status_code: '200'
 block_message: '<h1>Access Denied</h1><p>Your request was blocked.</p>'
 ratelimit_status_code: '429'
 ratelimit_message: '<h1>Too Many Requests</h1><p>Please slow down.</p>'
