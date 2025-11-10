@@ -382,6 +382,33 @@ WORKER;
       'const cookieName=' . $cookieNameJson . ';' .
       'const progressEl=document.getElementById("progress");' .
       'const errorEl=document.getElementById("error");' .
+      'async function sha256(str){' .
+      'const encoder=new TextEncoder();' .
+      'const data=encoder.encode(str);' .
+      'const hashBuffer=await crypto.subtle.digest("SHA-256",data);' .
+      'const hashArray=Array.from(new Uint8Array(hashBuffer));' .
+      'return hashArray.map(b=>b.toString(16).padStart(2,"0")).join("");}' .
+      'async function computePowSync(){' .
+      'const target="0".repeat(difficulty);' .
+      'let nonce=0;' .
+      'const startTime=Date.now();' .
+      'while(nonce<maxIterations){' .
+      'if(Date.now()-startTime>timeout*1000){' .
+      'throw new Error("' . $this->t('Timeout') . '");}' .
+      'const hash=await sha256(challenge+nonce);' .
+      'if(hash.startsWith(target)){' .
+      'return{success:true,nonce,hash};}' .
+      'nonce++;' .
+      'if(nonce%1000===0){' .
+      'progressEl.textContent="' . $this->t('Computing') . ': "+nonce.toLocaleString()+" attempts...";' .
+      'await new Promise(r=>setTimeout(r,0));}' .
+      '}' .
+      'throw new Error("' . $this->t('Max iterations reached') . '");}' .
+      'let useWorker=true;' .
+      'try{' .
+      'if(typeof Worker==="undefined"||Worker.toString().includes("[native code]")==false){useWorker=false;}' .
+      '}catch(e){useWorker=false;}' .
+      'if(useWorker){' .
       'try{' .
       'const workerBlob=atob("' . $workerBlob . '");' .
       'const blob=new Blob([workerBlob],{type:"application/javascript"});' .
@@ -401,7 +428,29 @@ WORKER;
       'worker.onerror=function(error){clearTimeout(timeoutId);worker.terminate();URL.revokeObjectURL(workerUrl);' .
       'errorEl.textContent="' . $this->t('Worker error: ') . ' "+error.message;};' .
       'worker.postMessage({challenge,difficulty,maxIterations});}' .
-      'catch(error){errorEl.textContent="Error: "+error.message;}})();</script>' .
+      'catch(workerError){' .
+      'console.warn("Worker failed, using fallback:",workerError);' .
+      'progressEl.innerHTML="<small>' . $this->t('Browser extension detected. Using compatibility mode...') . '</small>";' .
+      'try{' .
+      'const result=await computePowSync();' .
+      'if(result.success){' .
+      'const scr=screen.width+"x"+screen.height;' .
+      'const payload=btoa(JSON.stringify({ts:exp,scr:scr,pow:{challenge:challenge,nonce:result.nonce,hash:result.hash}}));' .
+      'const d=new Date(exp);const val=payload+"."+sig;' .
+      'document.cookie=cookieName+"="+val+";path=/;expires="+d.toUTCString()+";SameSite=Lax";' .
+      'progressEl.textContent="' . $this->t('Verification complete! Redirecting...') . '";setTimeout(()=>location.reload(),500);}}' .
+      'catch(syncError){errorEl.textContent="Error: "+syncError.message;}}}' .
+      'else{' .
+      'progressEl.innerHTML="<small>' . $this->t('Browser extension detected. Using compatibility mode...') . '</small>";' .
+      'try{' .
+      'const result=await computePowSync();' .
+      'if(result.success){' .
+      'const scr=screen.width+"x"+screen.height;' .
+      'const payload=btoa(JSON.stringify({ts:exp,scr:scr,pow:{challenge:challenge,nonce:result.nonce,hash:result.hash}}));' .
+      'const d=new Date(exp);const val=payload+"."+sig;' .
+      'document.cookie=cookieName+"="+val+";path=/;expires="+d.toUTCString()+";SameSite=Lax";' .
+      'progressEl.textContent="' . $this->t('Verification complete! Redirecting...') . '";setTimeout(()=>location.reload(),500);}}' .
+      'catch(syncError){errorEl.textContent="Error: "+syncError.message;}}})();</script>' .
       '</body></html>';
 
     return $html;
