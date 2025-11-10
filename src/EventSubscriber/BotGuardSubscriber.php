@@ -214,7 +214,9 @@ class BotGuardSubscriber implements EventSubscriberInterface {
     $ua = $request->headers->get('User-Agent', '');
     $path = $request->getPathInfo();
     $trustedProxies = (string) $config->get('trusted_proxies');
-    $ip = $this->ipHelper->getTrustedClientIp($request, $trustedProxies);
+    $ipData = $this->ipHelper->getTrustedClientIp($request, $trustedProxies);
+    $ip = $ipData['ip'];
+    $isProxyIp = $ipData['is_proxy'];
     $method = $request->getMethod();
 
     // IP Allow-list (bypass all checks).
@@ -230,7 +232,8 @@ class BotGuardSubscriber implements EventSubscriberInterface {
     }
 
     // Decision cache.
-    $cacheEnabled = (bool) $config->get('cache_enabled');
+    // Disable caching for proxy IPs (multiple users may share the same proxy IP).
+    $cacheEnabled = (bool) $config->get('cache_enabled') && !$isProxyIp;
     $cacheTtl = (int) ($config->get('cache_ttl') ?? 300);
     $cacheKey = $this->detectionHelper->cacheKey($ip, $ua, $path);
 
@@ -276,12 +279,15 @@ class BotGuardSubscriber implements EventSubscriberInterface {
     }
 
     // Rate limit.
-    $max = (int) ($config->get('rate_limit') ?? 20);
-    $win = (int) ($config->get('rate_window') ?? 10);
-    if ($max > 0) {
-      if (!$this->detectionHelper->rateCheck($ip, $max, $win)) {
-        // 429 not cached (small window anyway)
-        $this->deny429($event, $config, $ip, $ua, $path, 'ratelimit');
+    // Skip rate limiting for proxy IPs (multiple users may share the same proxy IP).
+    if (!$isProxyIp) {
+      $max = (int) ($config->get('rate_limit') ?? 20);
+      $win = (int) ($config->get('rate_window') ?? 10);
+      if ($max > 0) {
+        if (!$this->detectionHelper->rateCheck($ip, $max, $win)) {
+          // 429 not cached (small window anyway)
+          $this->deny429($event, $config, $ip, $ua, $path, 'ratelimit');
+        }
       }
     }
 
@@ -351,7 +357,7 @@ class BotGuardSubscriber implements EventSubscriberInterface {
         }
 
         // Check for facet flood pattern
-        if ($this->facetService->checkFacetFlood($facet_params, $ip)) {
+        if ($this->facetService->checkFacetFlood($facet_params, $ip, $isProxyIp)) {
           $this->detectionHelper->storeDecision($cacheEnabled, $cacheKey, self::BLOCK, $cacheTtl);
           $this->deny($event, $config, $ip, $ua, $path, 'facet-flood-ban');
           return;

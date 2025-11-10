@@ -127,18 +127,21 @@ class BotGuardFacetService {
    *   The facet parameters.
    * @param string $ip
    *   The client IP address.
+   * @param bool $isProxyIp
+   *   Whether the IP is a proxy IP (skip flood check if TRUE).
    *
    * @return bool
    *   TRUE if the IP should be banned, FALSE otherwise.
    */
-  public function checkFacetFlood(array $facet_params, string $ip): bool {
+  public function checkFacetFlood(array $facet_params, string $ip, bool $isProxyIp = FALSE): bool {
     $config = $this->configFactory->get('bot_guard.settings');
     $facetFloodEnabled = (bool) ($config->get('facet_flood_enabled') ?? TRUE);
     $facetThreshold = (int) ($config->get('facet_flood_threshold') ?? 20);
     $facetWindow = (int) ($config->get('facet_flood_window') ?? 600);
     $facetBan = (int) ($config->get('facet_flood_ban') ?? 1800);
 
-    if (!$facetFloodEnabled || $facetThreshold <= 0 || $facetWindow <= 0 || !function_exists('apcu_fetch')) {
+    // Skip flood check for proxy IPs (multiple users may share the same proxy IP).
+    if ($isProxyIp || !$facetFloodEnabled || $facetThreshold <= 0 || $facetWindow <= 0 || !function_exists('apcu_fetch')) {
       return FALSE;
     }
 

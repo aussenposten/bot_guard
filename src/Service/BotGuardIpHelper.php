@@ -83,16 +83,19 @@ class BotGuardIpHelper {
    * @param string $trustedProxies
    *   Newline-separated list of trusted proxy IPs/CIDR ranges.
    *
-   * @return string
-   *   The client IP address.
+   * @return array
+   *   An array with keys:
+   *   - 'ip': The client IP address.
+   *   - 'is_proxy': TRUE if the returned IP is a proxy IP (original IP could
+   *     not be extracted), FALSE if it's a real client IP.
    */
-  public function getTrustedClientIp(Request $request, string $trustedProxies): string {
+  public function getTrustedClientIp(Request $request, string $trustedProxies): array {
     // Get the immediate client IP (might be proxy).
     $immediateIp = $request->getClientIp() ?? '0.0.0.0';
 
     // If no trusted proxies configured, use immediate IP.
     if (empty($trustedProxies)) {
-      return $immediateIp;
+      return ['ip' => $immediateIp, 'is_proxy' => FALSE];
     }
 
     // Check if immediate IP is a trusted proxy.
@@ -100,7 +103,7 @@ class BotGuardIpHelper {
 
     // If not from trusted proxy, return immediate IP.
     if (!$isTrustedProxy) {
-      return $immediateIp;
+      return ['ip' => $immediateIp, 'is_proxy' => FALSE];
     }
 
     // Priority order of headers to check (most reliable first).
@@ -127,13 +130,14 @@ class BotGuardIpHelper {
 
         // Validate IP format.
         if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE)) {
-          return $ip;
+          return ['ip' => $ip, 'is_proxy' => FALSE];
         }
       }
     }
 
     // Fallback to immediate IP if no valid header found.
-    return $immediateIp;
+    // Mark as proxy IP since we couldn't extract the real client IP.
+    return ['ip' => $immediateIp, 'is_proxy' => TRUE];
   }
 
 }
